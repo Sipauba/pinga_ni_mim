@@ -10,6 +10,7 @@ from app_paths import APP_DIR
 
 
 EQUIPMENT_FILE = APP_DIR / "equipamentos.txt"
+DEFAULT_EQUIPMENT_GROUP = "Sem grupo"
 
 
 @dataclass(frozen=True)
@@ -18,6 +19,7 @@ class EquipmentRecord:
 
     name: str
     ip_address: str
+    group: str = DEFAULT_EQUIPMENT_GROUP
 
 
 class EquipmentStore:
@@ -35,7 +37,7 @@ class EquipmentStore:
 
         self.file_path.write_text(
             "# Equipamentos monitorados\n"
-            "# Formato: nome;ip\n",
+            "# Formato: nome;ip;grupo\n",
             encoding="utf-8",
         )
 
@@ -60,8 +62,12 @@ class EquipmentStore:
 
                 name = first_column
                 ip_address = row[1].strip()
+                group = row[2].strip() if len(row) >= 3 else DEFAULT_EQUIPMENT_GROUP
+                group = group or DEFAULT_EQUIPMENT_GROUP
                 if name and ip_address:
-                    records.append(EquipmentRecord(name=name, ip_address=ip_address))
+                    records.append(
+                        EquipmentRecord(name=name, ip_address=ip_address, group=group)
+                    )
 
         return records
 
@@ -72,8 +78,9 @@ class EquipmentStore:
 
         with self.file_path.open("w", encoding="utf-8", newline="") as file:
             file.write("# Equipamentos monitorados\n")
-            file.write("# Formato: nome;ip\n")
+            file.write("# Formato: nome;ip;grupo\n")
 
             writer = csv.writer(file, delimiter=";", lineterminator="\n")
             for record in records:
-                writer.writerow([record.name, record.ip_address])
+                group = record.group.strip() or DEFAULT_EQUIPMENT_GROUP
+                writer.writerow([record.name, record.ip_address, group])

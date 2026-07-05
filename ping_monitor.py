@@ -23,6 +23,7 @@ class PingResult:
 
     name: str
     ip_address: str
+    group: str
     is_online: bool
     latency_ms: float | None
     checked_at: datetime
@@ -36,12 +37,14 @@ class EquipmentMonitor:
         self,
         name: str,
         ip_address: str,
+        group: str,
         result_callback: Callable[[PingResult], None],
         interval_seconds: float = 1.0,
         timeout_ms: int = 1000,
     ) -> None:
         self.name = name
         self.ip_address = ip_address
+        self.group = group
         self.result_callback = result_callback
         self.interval_seconds = interval_seconds
         self.timeout_ms = timeout_ms
@@ -75,6 +78,7 @@ class EquipmentMonitor:
                 PingResult(
                     name=self.name,
                     ip_address=self.ip_address,
+                    group=self.group,
                     is_online=is_online,
                     latency_ms=latency_ms,
                     checked_at=datetime.now(),

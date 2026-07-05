@@ -6,7 +6,10 @@ from dataclasses import dataclass, field
 from datetime import datetime
 
 from notification_client import EvolutionApiClient, NotificationResponse
-from notification_config import NOTIFICATION_THRESHOLDS_MINUTES
+from notification_config import (
+    DEFAULT_NOTIFICATION_THRESHOLDS_MINUTES,
+    normalize_thresholds_minutes,
+)
 from outage_logger import OutageLogger
 from ping_monitor import PingResult
 from secure_settings import NotificationSettings
@@ -28,14 +31,17 @@ class OutageNotifier:
         client: EvolutionApiClient | None = None,
         logger: OutageLogger | None = None,
         settings: NotificationSettings | None = None,
-        thresholds_minutes: tuple[int, ...] = NOTIFICATION_THRESHOLDS_MINUTES,
+        thresholds_minutes: tuple[int, ...] | None = None,
     ) -> None:
         self.settings = settings or NotificationSettings()
         self.client = client or EvolutionApiClient()
         self.logger = logger or OutageLogger()
         self.client.update_credentials(self.settings.api_url, self.settings.api_key)
         self.group_number = self.settings.whatsapp_number
-        self.thresholds_minutes = tuple(sorted(thresholds_minutes))
+        thresholds = thresholds_minutes or self.settings.thresholds_minutes
+        self.thresholds_minutes = normalize_thresholds_minutes(
+            thresholds or DEFAULT_NOTIFICATION_THRESHOLDS_MINUTES
+        )
         self._outages_by_ip: dict[str, OutageState] = {}
 
     def update_settings(self, settings: NotificationSettings) -> None:
@@ -44,6 +50,12 @@ class OutageNotifier:
         self.settings = settings
         self.client.update_credentials(settings.api_url, settings.api_key)
         self.group_number = settings.whatsapp_number
+        self.update_thresholds(settings.thresholds_minutes)
+
+    def update_thresholds(self, thresholds_minutes: tuple[int, ...]) -> None:
+        """Atualiza os intervalos usados nos proximos alertas."""
+
+        self.thresholds_minutes = normalize_thresholds_minutes(thresholds_minutes)
 
     def handle_ping_result(self, result: PingResult) -> None:
         """Atualiza o estado de queda e envia alertas quando necessario."""
@@ -131,6 +143,7 @@ class OutageNotifier:
             "ALERTA DE DESCONEXAO\n"
             f"Equipamento: {result.name}\n"
             f"IP: {result.ip_address}\n"
+            f"Grupo: {result.group}\n"
             f"Sem resposta ha: {duration}\n"
             f"Inicio da queda: {started_at}\n"
             f"Ultima verificacao: {checked_at}\n"
@@ -152,6 +165,7 @@ class OutageNotifier:
             "CONEXAO REESTABELECIDA\n"
             f"Equipamento: {result.name}\n"
             f"IP: {result.ip_address}\n"
+            f"Grupo: {result.group}\n"
             f"Tempo fora: {duration}\n"
             f"Inicio da queda: {started_at_text}\n"
             f"Recuperado em: {restored_at_text}\n"

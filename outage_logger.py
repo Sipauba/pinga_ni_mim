@@ -28,7 +28,7 @@ class OutageLogger:
 
             self._append_line(
                 f"{checked_at} | INICIO_QUEDA | Equipamento: {result.name} | "
-                f"IP: {result.ip_address} | Mensagem: {error}"
+                f"IP: {result.ip_address} | Grupo: {result.group} | Mensagem: {error}"
             )
         except OSError as exc:
             print(f"Falha ao registrar inicio de queda: {exc}")
@@ -47,7 +47,7 @@ class OutageLogger:
 
             self._append_line(
                 f"{finished_at_text} | FIM_QUEDA | Equipamento: {result.name} | "
-                f"IP: {result.ip_address} | Inicio: {started_at_text} | "
+                f"IP: {result.ip_address} | Grupo: {result.group} | Inicio: {started_at_text} | "
                 f"Duracao: {duration} | Latencia atual: {latency}"
             )
         except OSError as exc:

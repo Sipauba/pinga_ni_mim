@@ -29,11 +29,13 @@ for detectada.
 2. Como adicionar equipamentos
 ------------------------------
 
-Na tela principal existem dois campos:
+Na tela principal existem tres campos:
 
 - Nome: identificacao do equipamento, por exemplo "Servidor", "Roteador" ou
   "Computador Financeiro".
 - IP: endereco IP do equipamento, por exemplo "192.168.0.10".
+- Grupo: categoria criada pelo usuario, por exemplo "Computadores",
+  "Servidores" ou "Equipamentos de rede".
 
 Depois de preencher os campos, clique em "Adicionar".
 
@@ -47,11 +49,15 @@ automaticamente a cada 1 segundo.
 A tabela mostra:
 
 - Equipamento: nome informado pelo usuario.
+- Grupo: categoria informada no cadastro.
 - IP: endereco monitorado.
 - Status: Online, Offline ou Aguardando.
 - Latencia: tempo de resposta do ping, quando disponivel.
 - Ultima leitura: horario da ultima verificacao.
 - Mensagem: erro retornado pelo ping quando o equipamento esta offline.
+
+Use o campo Visualizar grupo para mostrar todos os equipamentos ou somente um
+grupo especifico.
 
 
 4. Salvamento automatico
@@ -65,11 +71,14 @@ Esse arquivo e criado pelo proprio programa caso ainda nao exista.
 
 Cada linha do arquivo segue o formato:
 
-Nome do equipamento;IP
+Nome do equipamento;IP;Grupo
 
 Exemplo:
 
-Servidor Principal;192.168.0.10
+Servidor Principal;192.168.0.10;Servidores
+
+Arquivos antigos no formato Nome;IP continuam sendo lidos. Nesses casos, o
+equipamento entra no grupo Sem grupo.
 
 Ao abrir o programa novamente, os equipamentos salvos nesse arquivo sao
 carregados automaticamente.
@@ -97,6 +106,7 @@ Nessa aba devem ser preenchidos:
 - URL do endpoint da Evolution API.
 - Numero do grupo ou telefone que recebera a notificacao.
 - Chave da API.
+- Intervalos, em minutos, que devem gerar alertas enquanto a queda continuar.
 
 Depois de preencher os campos, clique em Salvar configuracoes.
 
@@ -117,12 +127,11 @@ Header: apikey: SUA_CHAVE
 
 A resposta lista os grupos. Copie o campo id do grupo desejado.
 
-O programa envia notificacoes quando um equipamento fica offline por:
+O programa envia notificacoes quando um equipamento fica offline pelos tempos
+informados no campo Alertar apos (min). Separe os valores por virgula, ponto e
+virgula ou espaco. Exemplo:
 
-- 1 minuto
-- 15 minutos
-- 30 minutos
-- 60 minutos
+1, 5, 15, 30
 
 Quando a conexao do equipamento e reestabelecida, o programa tambem envia uma
 mensagem informando a recuperacao.
@@ -182,7 +191,7 @@ equipment_store.py
 Salva e carrega os equipamentos no arquivo equipamentos.txt.
 
 notification_config.py
-Guarda apenas configuracoes nao sensiveis, como os tempos de notificacao.
+Guarda os padroes e a validacao dos intervalos de notificacao.
 
 secure_settings.py
 Salva e carrega as configuracoes sensiveis com criptografia local.
@@ -204,7 +213,7 @@ Registra inicio, fim e duracao das quedas no arquivo quedas_log.txt.
 - Para testar uma queda real, monitore o IP de outro equipamento. Pingar o
   proprio computador pode nao representar corretamente a conexao fisica.
 - O envio de notificacoes depende do acesso ao endereco da Evolution API.
-- A URL da API, a chave e o grupo do WhatsApp devem ser configurados pela aba
-  Configuracoes.
+- A URL da API, a chave, o destino do WhatsApp e os intervalos de alerta devem
+  ser configurados pela aba Configuracoes.
 - O arquivo configuracoes_sensiveis.dat esta no .gitignore e nao deve ser
   enviado ao GitHub.

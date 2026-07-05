@@ -14,6 +14,10 @@ import os
 from pathlib import Path
 
 from app_paths import APP_DIR
+from notification_config import (
+    DEFAULT_NOTIFICATION_THRESHOLDS_MINUTES,
+    normalize_thresholds_minutes,
+)
 
 
 SETTINGS_FILE = APP_DIR / "configuracoes_sensiveis.dat"
@@ -27,6 +31,7 @@ class NotificationSettings:
     api_url: str = ""
     api_key: str = ""
     whatsapp_number: str = ""
+    thresholds_minutes: tuple[int, ...] = DEFAULT_NOTIFICATION_THRESHOLDS_MINUTES
 
     def is_complete(self) -> bool:
         """Indica se todos os campos obrigatorios foram preenchidos."""
@@ -66,6 +71,7 @@ class SecureSettingsStore:
             api_url=str(payload.get("api_url", "")).strip(),
             api_key=str(payload.get("api_key", "")).strip(),
             whatsapp_number=str(payload.get("whatsapp_number", "")).strip(),
+            thresholds_minutes=_thresholds_from_payload(payload),
         )
 
     def save(self, settings: NotificationSettings) -> None:
@@ -75,6 +81,7 @@ class SecureSettingsStore:
             "api_url": settings.api_url,
             "api_key": settings.api_key,
             "whatsapp_number": settings.whatsapp_number,
+            "thresholds_minutes": list(normalize_thresholds_minutes(settings.thresholds_minutes)),
         }
         plain_data = json.dumps(payload, ensure_ascii=True).encode("utf-8")
 
@@ -204,3 +211,16 @@ def _ensure_windows() -> None:
 
     if os.name != "nt":
         raise SettingsStorageError("A criptografia DPAPI esta disponivel apenas no Windows.")
+
+
+def _thresholds_from_payload(payload: dict[str, object]) -> tuple[int, ...]:
+    """Carrega intervalos salvos ou usa o padrao quando nao existirem."""
+
+    raw_values = payload.get("thresholds_minutes")
+    if not isinstance(raw_values, list):
+        return DEFAULT_NOTIFICATION_THRESHOLDS_MINUTES
+
+    try:
+        return normalize_thresholds_minutes(int(value) for value in raw_values)
+    except (TypeError, ValueError):
+        return DEFAULT_NOTIFICATION_THRESHOLDS_MINUTES

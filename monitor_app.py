@@ -8,10 +8,14 @@ import tkinter as tk
 from tkinter import messagebox, ttk
 from urllib.parse import urlparse
 
-from equipment_store import EquipmentRecord, EquipmentStore
+from equipment_store import DEFAULT_EQUIPMENT_GROUP, EquipmentRecord, EquipmentStore
+from notification_config import format_thresholds_text, parse_thresholds_text
 from outage_notifier import OutageNotifier
 from ping_monitor import EquipmentMonitor, PingResult
 from secure_settings import NotificationSettings, SecureSettingsStore, SettingsStorageError
+
+
+GROUP_FILTER_ALL = "Todos os grupos"
 
 
 class NetworkMonitorApp(tk.Tk):
@@ -31,6 +35,8 @@ class NetworkMonitorApp(tk.Tk):
         self._monitors: dict[str, EquipmentMonitor] = {}
         self._items_by_ip: dict[str, str] = {}
         self._ip_by_item: dict[str, str] = {}
+        self._group_by_ip: dict[str, str] = {}
+        self._visible_ips: set[str] = set()
         self._last_status: dict[str, bool] = {}
         self._store = EquipmentStore()
         self._settings_store = SecureSettingsStore()
@@ -40,10 +46,15 @@ class NetworkMonitorApp(tk.Tk):
 
         self.name_var = tk.StringVar()
         self.ip_var = tk.StringVar()
+        self.group_var = tk.StringVar(value=DEFAULT_EQUIPMENT_GROUP)
+        self.group_filter_var = tk.StringVar(value=GROUP_FILTER_ALL)
         self.summary_var = tk.StringVar(value="Nenhum equipamento monitorado")
         self.api_url_var = tk.StringVar(value=self._notification_settings.api_url)
         self.whatsapp_number_var = tk.StringVar(value=self._notification_settings.whatsapp_number)
         self.api_key_var = tk.StringVar(value=self._notification_settings.api_key)
+        self.notification_intervals_var = tk.StringVar(
+            value=format_thresholds_text(self._notification_settings.thresholds_minutes)
+        )
         self.show_api_key_var = tk.BooleanVar(value=False)
         self.settings_status_var = tk.StringVar(value=self._build_settings_status())
 
@@ -89,7 +100,7 @@ class NetworkMonitorApp(tk.Tk):
         notebook.add(settings_tab, text="Configuracoes")
 
         root.columnconfigure(0, weight=1)
-        root.rowconfigure(2, weight=1)
+        root.rowconfigure(3, weight=1)
 
         header = ttk.Frame(root)
         header.grid(row=0, column=0, sticky="ew", pady=(0, 12))
@@ -116,17 +127,52 @@ class NetworkMonitorApp(tk.Tk):
         ip_entry.grid(row=0, column=3, sticky="ew", padx=(0, 12))
         ip_entry.bind("<Return>", lambda _event: self._add_equipment())
 
+        ttk.Label(form, text="Grupo").grid(row=1, column=0, sticky="w", padx=(0, 8))
+        self.group_entry = ttk.Combobox(form, textvariable=self.group_var)
+        self.group_entry.grid(
+            row=1,
+            column=1,
+            columnspan=3,
+            sticky="ew",
+            padx=(0, 12),
+            pady=(10, 0),
+        )
+        self.group_entry.bind("<Return>", lambda _event: self._add_equipment())
+
         ttk.Button(form, text="Adicionar", command=self._add_equipment).grid(
-            row=0, column=4, sticky="ew"
+            row=0, column=4, rowspan=2, sticky="nsew"
+        )
+
+        filters = ttk.Frame(root)
+        filters.grid(row=2, column=0, sticky="ew", pady=(0, 12))
+        filters.columnconfigure(1, weight=1)
+
+        ttk.Label(filters, text="Visualizar grupo").grid(
+            row=0, column=0, sticky="w", padx=(0, 8)
+        )
+        self.group_filter_combo = ttk.Combobox(
+            filters,
+            textvariable=self.group_filter_var,
+            state="readonly",
+            values=(GROUP_FILTER_ALL,),
+        )
+        self.group_filter_combo.grid(row=0, column=1, sticky="ew", padx=(0, 8))
+        self.group_filter_combo.bind(
+            "<<ComboboxSelected>>",
+            lambda _event: self._apply_group_filter(),
+        )
+        ttk.Button(filters, text="Todos", command=self._clear_group_filter).grid(
+            row=0, column=2, sticky="e"
         )
 
         table_frame = ttk.Frame(root)
-        table_frame.grid(row=2, column=0, sticky="nsew")
+        table_frame.grid(row=3, column=0, sticky="nsew")
         table_frame.columnconfigure(0, weight=1)
         table_frame.rowconfigure(0, weight=1)
 
-        columns = ("name", "ip", "status", "latency", "checked_at", "error")
+        columns = ("group", "name", "ip", "status", "latency", "checked_at", "error")
         self.tree = ttk.Treeview(table_frame, columns=columns, show="headings", selectmode="browse")
+        self.tree.heading("group", text="Grupo")
         self.tree.heading("name", text="Equipamento")
         self.tree.heading("ip", text="IP")
         self.tree.heading("status", text="Status")
@@ -134,12 +180,13 @@ class NetworkMonitorApp(tk.Tk):
         self.tree.heading("checked_at", text="Ultima leitura")
         self.tree.heading("error", text="Mensagem")
 
-        self.tree.column("name", width=180, minwidth=120)
+        self.tree.column("group", width=130, minwidth=100)
+        self.tree.column("name", width=170, minwidth=120)
         self.tree.column("ip", width=130, minwidth=110)
         self.tree.column("status", width=100, minwidth=90, anchor="center")
         self.tree.column("latency", width=90, minwidth=80, anchor="center")
         self.tree.column("checked_at", width=110, minwidth=100, anchor="center")
-        self.tree.column("error", width=260, minwidth=160)
+        self.tree.column("error", width=220, minwidth=160)
 
         self.tree.tag_configure("online", foreground="#137333")
         self.tree.tag_configure("offline", foreground="#b3261e")
@@ -152,7 +199,7 @@ class NetworkMonitorApp(tk.Tk):
         scrollbar.grid(row=0, column=1, sticky="ns")
 
         actions = ttk.Frame(root)
-        actions.grid(row=3, column=0, sticky="ew", pady=(12, 0))
+        actions.grid(row=4, column=0, sticky="ew", pady=(12, 0))
         actions.columnconfigure(0, weight=1)
 
         ttk.Button(actions, text="Remover selecionado", command=self._remove_selected).grid(
@@ -191,15 +238,25 @@ class NetworkMonitorApp(tk.Tk):
         self.api_key_entry = ttk.Entry(form, textvariable=self.api_key_var, show="*")
         self.api_key_entry.grid(row=2, column=1, sticky="ew", pady=(0, 10))
 
+        ttk.Label(form, text="Alertar apos (min)").grid(
+            row=3, column=0, sticky="w", padx=(0, 8)
+        )
+        ttk.Entry(form, textvariable=self.notification_intervals_var).grid(
+            row=3,
+            column=1,
+            sticky="ew",
+            pady=(0, 10),
+        )
+
         ttk.Checkbutton(
             form,
             text="Mostrar chave",
             variable=self.show_api_key_var,
             command=self._toggle_api_key_visibility,
-        ).grid(row=3, column=1, sticky="w", pady=(0, 10))
+        ).grid(row=4, column=1, sticky="w", pady=(0, 10))
 
         actions = ttk.Frame(form)
-        actions.grid(row=4, column=0, columnspan=2, sticky="ew")
+        actions.grid(row=5, column=0, columnspan=2, sticky="ew")
         actions.columnconfigure(0, weight=1)
 
         ttk.Label(actions, textvariable=self.settings_status_var, style="Summary.TLabel").grid(
@@ -221,6 +278,8 @@ class NetworkMonitorApp(tk.Tk):
             "URL do endpoint: use o endpoint de envio de texto da Evolution API. "
             "O formato costuma ser https://SEU_SERVIDOR/message/sendText/NOME_DA_INSTANCIA.\n\n"
             "Chave da API: use a apikey/chave da instancia no painel da Evolution API.\n\n"
+            "Alertar apos: informe os minutos de queda que devem gerar notificacao, "
+            "separados por virgula. Exemplo: 1, 5, 15, 30.\n\n"
             "Numero ou grupo: para telefone, informe o numero com DDI e DDD. Para grupo, use o JID "
             "terminado em @g.us. Uma forma pratica de descobrir o grupo e chamar na Evolution API: "
             "GET /group/fetchAllGroups/NOME_DA_INSTANCIA?getParticipants=false com o header apikey. "
@@ -260,10 +319,17 @@ class NetworkMonitorApp(tk.Tk):
     def _save_notification_settings(self) -> None:
         """Valida, criptografa e salva as configuracoes de notificacao."""
 
+        try:
+            thresholds_minutes = parse_thresholds_text(self.notification_intervals_var.get())
+        except ValueError as exc:
+            messagebox.showwarning("Intervalos invalidos", str(exc))
+            return
+
         settings = NotificationSettings(
             api_url=self.api_url_var.get().strip(),
             api_key=self.api_key_var.get().strip(),
             whatsapp_number=self.whatsapp_number_var.get().strip(),
+            thresholds_minutes=thresholds_minutes,
         )
 
         if not settings.is_complete():
@@ -289,6 +355,7 @@ class NetworkMonitorApp(tk.Tk):
         self._notification_settings = settings
         self._settings_load_error = None
         self._outage_notifier.update_settings(settings)
+        self.notification_intervals_var.set(format_thresholds_text(thresholds_minutes))
         self.settings_status_var.set("Configuracoes salvas com criptografia local.")
         messagebox.showinfo("Configuracoes salvas", "As notificacoes foram configuradas.")
 
@@ -297,6 +364,7 @@ class NetworkMonitorApp(tk.Tk):
 
         name = self.name_var.get().strip()
         ip_address = self.ip_var.get().strip()
+        group = self._normalize_group(self.group_var.get())
 
         if not name or not ip_address:
             messagebox.showwarning("Campos obrigatorios", "Informe o nome e o IP do equipamento.")
@@ -310,11 +378,12 @@ class NetworkMonitorApp(tk.Tk):
             messagebox.showwarning("IP duplicado", "Esse IP ja esta sendo monitorado.")
             return
 
-        self._start_monitoring(name, ip_address)
+        self._start_monitoring(name, ip_address, group)
         self._save_equipment_list()
 
         self.name_var.set("")
         self.ip_var.set("")
+        self.group_var.set(group)
         self._update_summary()
 
     def _remove_selected(self) -> None:
@@ -333,9 +402,13 @@ class NetworkMonitorApp(tk.Tk):
 
         self._items_by_ip.pop(ip_address, None)
         self._last_status.pop(ip_address, None)
+        self._group_by_ip.pop(ip_address, None)
+        self._visible_ips.discard(ip_address)
         self._outage_notifier.clear(ip_address)
         self.tree.delete(item_id)
         self._save_equipment_list()
+        self._refresh_group_options()
+        self._apply_group_filter()
         self._update_summary()
 
     def _load_saved_equipment(self) -> None:
@@ -353,7 +426,7 @@ class NetworkMonitorApp(tk.Tk):
                 duplicated_ips.append(record.ip_address)
                 continue
 
-            self._start_monitoring(record.name, record.ip_address)
+            self._start_monitoring(record.name, record.ip_address, record.group)
 
         self._update_summary()
 
@@ -364,12 +437,14 @@ class NetworkMonitorApp(tk.Tk):
                 "por IP invalido ou duplicado.",
             )
 
-    def _start_monitoring(self, name: str, ip_address: str) -> None:
+    def _start_monitoring(self, name: str, ip_address: str, group: str) -> None:
         """Cria a linha na tabela e inicia o ping periodico."""
 
+        group = self._normalize_group(group)
         monitor = EquipmentMonitor(
             name=name,
             ip_address=ip_address,
+            group=group,
             result_callback=self._result_queue.put,
         )
         monitor.start()
@@ -377,19 +452,27 @@ class NetworkMonitorApp(tk.Tk):
         item_id = self.tree.insert(
             "",
             "end",
-            values=(name, ip_address, "Aguardando", "-", "-", ""),
+            values=(group, name, ip_address, "Aguardando", "-", "-", ""),
             tags=("waiting",),
         )
 
         self._monitors[ip_address] = monitor
         self._items_by_ip[ip_address] = item_id
         self._ip_by_item[item_id] = ip_address
+        self._group_by_ip[ip_address] = group
+        self._visible_ips.add(ip_address)
+        self._refresh_group_options()
+        self._apply_group_filter()
 
     def _save_equipment_list(self) -> None:
         """Salva no arquivo texto os equipamentos monitorados atualmente."""
 
         records = [
-            EquipmentRecord(name=monitor.name, ip_address=monitor.ip_address)
+            EquipmentRecord(
+                name=monitor.name,
+                ip_address=monitor.ip_address,
+                group=monitor.group,
+            )
             for monitor in self._monitors.values()
         ]
         self._store.save(records)
@@ -426,7 +509,15 @@ class NetworkMonitorApp(tk.Tk):
 
         self.tree.item(
             item_id,
-            values=(result.name, result.ip_address, status, latency, checked_at, message),
+            values=(
+                result.group,
+                result.name,
+                result.ip_address,
+                status,
+                latency,
+                checked_at,
+                message,
+            ),
             tags=(tag,),
         )
 
@@ -442,13 +533,90 @@ class NetworkMonitorApp(tk.Tk):
             self.summary_var.set("Nenhum equipamento monitorado")
             return
 
-        online = sum(1 for status in self._last_status.values() if status)
-        offline = sum(1 for status in self._last_status.values() if status is False)
-        waiting = total - online - offline
+        filtered_ips = self._get_filtered_ips()
+        visible_total = len(filtered_ips)
+        online = sum(1 for ip_address in filtered_ips if self._last_status.get(ip_address))
+        offline = sum(
+            1 for ip_address in filtered_ips if self._last_status.get(ip_address) is False
+        )
+        waiting = visible_total - online - offline
+
+        selected_group = self.group_filter_var.get()
+        if selected_group == GROUP_FILTER_ALL:
+            self.summary_var.set(
+                f"Monitorando {total} | Online: {online} | "
+                f"Offline: {offline} | Aguardando: {waiting}"
+            )
+            return
 
         self.summary_var.set(
-            f"Monitorando {total} | Online: {online} | Offline: {offline} | Aguardando: {waiting}"
+            f"Grupo {selected_group}: {visible_total} de {total} | Online: {online} | "
+            f"Offline: {offline} | Aguardando: {waiting}"
         )
+
+    def _normalize_group(self, value: str) -> str:
+        """Padroniza o grupo informado pelo usuario."""
+
+        return value.strip() or DEFAULT_EQUIPMENT_GROUP
+
+    def _refresh_group_options(self) -> None:
+        """Atualiza as listas de grupos usadas no cadastro e no filtro."""
+
+        groups = {
+            self._normalize_group(group)
+            for group in self._group_by_ip.values()
+            if self._normalize_group(group)
+        }
+        groups.add(self._normalize_group(self.group_var.get()))
+        groups.add(DEFAULT_EQUIPMENT_GROUP)
+
+        ordered_groups = [DEFAULT_EQUIPMENT_GROUP]
+        ordered_groups.extend(
+            group for group in sorted(groups) if group != DEFAULT_EQUIPMENT_GROUP
+        )
+
+        self.group_entry.configure(values=tuple(ordered_groups))
+        filter_values = (GROUP_FILTER_ALL, *ordered_groups)
+        self.group_filter_combo.configure(values=filter_values)
+
+        if self.group_filter_var.get() not in filter_values:
+            self.group_filter_var.set(GROUP_FILTER_ALL)
+
+    def _clear_group_filter(self) -> None:
+        """Mostra todos os grupos novamente."""
+
+        self.group_filter_var.set(GROUP_FILTER_ALL)
+        self._apply_group_filter()
+
+    def _apply_group_filter(self) -> None:
+        """Mostra na tabela apenas os equipamentos do grupo selecionado."""
+
+        selected_group = self.group_filter_var.get()
+        for ip_address, item_id in self._items_by_ip.items():
+            group = self._group_by_ip.get(ip_address, DEFAULT_EQUIPMENT_GROUP)
+            should_show = selected_group == GROUP_FILTER_ALL or group == selected_group
+
+            if should_show and ip_address not in self._visible_ips:
+                self.tree.reattach(item_id, "", "end")
+                self._visible_ips.add(ip_address)
+            elif not should_show and ip_address in self._visible_ips:
+                self.tree.detach(item_id)
+                self._visible_ips.discard(ip_address)
+
+        self._update_summary()
+
+    def _get_filtered_ips(self) -> list[str]:
+        """Retorna os IPs considerados pelo resumo atual."""
+
+        selected_group = self.group_filter_var.get()
+        if selected_group == GROUP_FILTER_ALL:
+            return list(self._monitors)
+
+        return [
+            ip_address
+            for ip_address, group in self._group_by_ip.items()
+            if group == selected_group
+        ]
 
     def _on_close(self) -> None:
         """Para os monitores ativos antes de fechar a janela."""
