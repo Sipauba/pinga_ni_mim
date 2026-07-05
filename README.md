@@ -35,9 +35,14 @@ pasta fixa e criar apenas um atalho para ele na area de trabalho.
 ## Funcionalidades atuais
 
 - Cadastro de multiplos equipamentos por nome, IP e grupo.
-- Filtro de visualizacao por grupo de equipamentos.
-- Ping automatico a cada 1 segundo.
-- Tabela com status online/offline, latencia e horario da ultima leitura.
+- Intervalo de ping configuravel por equipamento.
+- Dashboard com cards de total, online, offline, instavel, oscilando, aguardando e manutencao.
+- Resumo por grupo e filtros por grupo, status e busca por nome/IP/grupo.
+- Tabela com status, latencia, horario da ultima leitura, tempo offline e ultimo evento.
+- Historico rapido de eventos recentes na tela principal.
+- Confirmacao de offline apenas apos falhas consecutivas configuraveis.
+- Deteccao de equipamentos oscilando.
+- Janela de manutencao por equipamento para silenciar alertas temporariamente.
 - Notificacao via WhatsApp em intervalos de queda definidos pelo usuario.
 - Notificacao via WhatsApp quando a conexao e reestabelecida apos uma queda alertada.
 - Aba de configuracoes para informar endpoint, destinatario e chave da Evolution API.
@@ -66,11 +71,12 @@ nao exista. Quando o programa estiver empacotado como executavel, esse arquivo
 fica na mesma pasta do `.exe`. Cada equipamento fica salvo em uma linha:
 
 ```text
-Nome do equipamento;192.168.0.10;Grupo
+Nome do equipamento;192.168.0.10;Grupo;IntervaloPingSegundos
 ```
 
-Arquivos antigos no formato `Nome;IP` continuam sendo lidos. Nesses casos, o
-equipamento entra no grupo `Sem grupo`.
+Arquivos antigos nos formatos `Nome;IP` e `Nome;IP;Grupo` continuam sendo
+lidos. Nesses casos, o equipamento entra no grupo `Sem grupo` quando nao houver
+grupo salvo e usa intervalo de ping de 1 segundo quando nao houver intervalo.
 
 Quando um equipamento e removido pela interface, ele tambem e removido desse
 arquivo.
@@ -105,6 +111,8 @@ Preencha:
 - Numero ou grupo que recebera as mensagens.
 - Chave da API.
 - Intervalos, em minutos, que devem gerar alerta quando a queda continuar.
+- Quantidade de falhas seguidas para confirmar offline.
+- Quantidade de mudancas online/offline e janela em minutos para marcar oscilacao.
 
 O campo de intervalos aceita valores separados por virgula, ponto e virgula ou
 espaco. Exemplo:
@@ -112,6 +120,9 @@ espaco. Exemplo:
 ```text
 1, 5, 15, 30
 ```
+
+O motor de monitoramento usa por padrao 3 falhas seguidas para confirmar
+offline e marca oscilacao quando ha 4 mudancas de estado dentro de 10 minutos.
 
 Ao clicar em `Salvar configuracoes`, o programa cria o arquivo local:
 

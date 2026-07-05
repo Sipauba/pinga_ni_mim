@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 from dataclasses import dataclass
+import math
 from pathlib import Path
 
 from app_paths import APP_DIR
@@ -11,6 +12,7 @@ from app_paths import APP_DIR
 
 EQUIPMENT_FILE = APP_DIR / "equipamentos.txt"
 DEFAULT_EQUIPMENT_GROUP = "Sem grupo"
+DEFAULT_PING_INTERVAL_SECONDS = 1.0
 
 
 @dataclass(frozen=True)
@@ -20,6 +22,7 @@ class EquipmentRecord:
     name: str
     ip_address: str
     group: str = DEFAULT_EQUIPMENT_GROUP
+    ping_interval_seconds: float = DEFAULT_PING_INTERVAL_SECONDS
 
 
 class EquipmentStore:
@@ -37,7 +40,7 @@ class EquipmentStore:
 
         self.file_path.write_text(
             "# Equipamentos monitorados\n"
-            "# Formato: nome;ip;grupo\n",
+            "# Formato: nome;ip;grupo;intervalo_ping_segundos\n",
             encoding="utf-8",
         )
 
@@ -64,9 +67,19 @@ class EquipmentStore:
                 ip_address = row[1].strip()
                 group = row[2].strip() if len(row) >= 3 else DEFAULT_EQUIPMENT_GROUP
                 group = group or DEFAULT_EQUIPMENT_GROUP
+                ping_interval_seconds = (
+                    _parse_ping_interval(row[3])
+                    if len(row) >= 4
+                    else DEFAULT_PING_INTERVAL_SECONDS
+                )
                 if name and ip_address:
                     records.append(
-                        EquipmentRecord(name=name, ip_address=ip_address, group=group)
+                        EquipmentRecord(
+                            name=name,
+                            ip_address=ip_address,
+                            group=group,
+                            ping_interval_seconds=ping_interval_seconds,
+                        )
                     )
 
         return records
@@ -78,9 +91,40 @@ class EquipmentStore:
 
         with self.file_path.open("w", encoding="utf-8", newline="") as file:
             file.write("# Equipamentos monitorados\n")
-            file.write("# Formato: nome;ip;grupo\n")
+            file.write("# Formato: nome;ip;grupo;intervalo_ping_segundos\n")
 
             writer = csv.writer(file, delimiter=";", lineterminator="\n")
             for record in records:
                 group = record.group.strip() or DEFAULT_EQUIPMENT_GROUP
-                writer.writerow([record.name, record.ip_address, group])
+                writer.writerow(
+                    [
+                        record.name,
+                        record.ip_address,
+                        group,
+                        _format_ping_interval(record.ping_interval_seconds),
+                    ]
+                )
+
+
+def _parse_ping_interval(value: str) -> float:
+    """Le o intervalo de ping salvo, caindo no padrao se estiver invalido."""
+
+    try:
+        interval = float(value.strip().replace(",", "."))
+    except ValueError:
+        return DEFAULT_PING_INTERVAL_SECONDS
+
+    if not math.isfinite(interval) or interval <= 0:
+        return DEFAULT_PING_INTERVAL_SECONDS
+
+    return interval
+
+
+def _format_ping_interval(value: float) -> str:
+    """Formata o intervalo sem casas decimais desnecessarias."""
+
+    interval = float(value)
+    if interval.is_integer():
+        return str(int(interval))
+
+    return f"{interval:.2f}".rstrip("0").rstrip(".")

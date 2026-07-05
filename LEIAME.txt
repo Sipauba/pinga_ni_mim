@@ -29,18 +29,19 @@ for detectada.
 2. Como adicionar equipamentos
 ------------------------------
 
-Na tela principal existem tres campos:
+Na tela principal existem quatro campos:
 
 - Nome: identificacao do equipamento, por exemplo "Servidor", "Roteador" ou
   "Computador Financeiro".
 - IP: endereco IP do equipamento, por exemplo "192.168.0.10".
 - Grupo: categoria criada pelo usuario, por exemplo "Computadores",
   "Servidores" ou "Equipamentos de rede".
+- Ping (s): intervalo de ping desse equipamento, em segundos.
 
 Depois de preencher os campos, clique em "Adicionar".
 
 O equipamento sera inserido na tabela e o programa comecara a fazer ping
-automaticamente a cada 1 segundo.
+automaticamente no intervalo informado.
 
 
 3. O que aparece na tabela
@@ -51,13 +52,15 @@ A tabela mostra:
 - Equipamento: nome informado pelo usuario.
 - Grupo: categoria informada no cadastro.
 - IP: endereco monitorado.
-- Status: Online, Offline ou Aguardando.
+- Status: Online, Offline, Instavel, Oscilando, Aguardando ou Manutencao.
 - Latencia: tempo de resposta do ping, quando disponivel.
 - Ultima leitura: horario da ultima verificacao.
+- Tempo offline: duracao da queda confirmada.
+- Ultimo evento: ultima mudanca importante detectada.
 - Mensagem: erro retornado pelo ping quando o equipamento esta offline.
 
-Use o campo Visualizar grupo para mostrar todos os equipamentos ou somente um
-grupo especifico.
+A tela tambem mostra cards de resumo, resumo por grupo, eventos recentes e
+filtros por grupo, status e busca.
 
 
 4. Salvamento automatico
@@ -71,14 +74,15 @@ Esse arquivo e criado pelo proprio programa caso ainda nao exista.
 
 Cada linha do arquivo segue o formato:
 
-Nome do equipamento;IP;Grupo
+Nome do equipamento;IP;Grupo;IntervaloPingSegundos
 
 Exemplo:
 
-Servidor Principal;192.168.0.10;Servidores
+Servidor Principal;192.168.0.10;Servidores;5
 
-Arquivos antigos no formato Nome;IP continuam sendo lidos. Nesses casos, o
-equipamento entra no grupo Sem grupo.
+Arquivos antigos nos formatos Nome;IP e Nome;IP;Grupo continuam sendo lidos.
+Nesses casos, o equipamento entra no grupo Sem grupo quando nao houver grupo e
+usa intervalo de ping de 1 segundo quando nao houver intervalo.
 
 Ao abrir o programa novamente, os equipamentos salvos nesse arquivo sao
 carregados automaticamente.
@@ -107,6 +111,8 @@ Nessa aba devem ser preenchidos:
 - Numero do grupo ou telefone que recebera a notificacao.
 - Chave da API.
 - Intervalos, em minutos, que devem gerar alertas enquanto a queda continuar.
+- Falhas seguidas necessarias para confirmar offline.
+- Quantidade de mudancas e janela em minutos para marcar oscilacao.
 
 Depois de preencher os campos, clique em Salvar configuracoes.
 
@@ -132,6 +138,14 @@ informados no campo Alertar apos (min). Separe os valores por virgula, ponto e
 virgula ou espaco. Exemplo:
 
 1, 5, 15, 30
+
+Por padrao, o programa so confirma offline depois de 3 falhas seguidas. Tambem
+marca um equipamento como oscilando quando ha 4 mudancas de estado dentro de 10
+minutos.
+
+Na tela principal, a acao Silenciar alertas cria uma janela de manutencao para
+o equipamento selecionado. Durante esse periodo ele continua sendo monitorado,
+mas nao gera alertas pelo WhatsApp.
 
 Quando a conexao do equipamento e reestabelecida, o programa tambem envia uma
 mensagem informando a recuperacao.
@@ -213,7 +227,7 @@ Registra inicio, fim e duracao das quedas no arquivo quedas_log.txt.
 - Para testar uma queda real, monitore o IP de outro equipamento. Pingar o
   proprio computador pode nao representar corretamente a conexao fisica.
 - O envio de notificacoes depende do acesso ao endereco da Evolution API.
-- A URL da API, a chave, o destino do WhatsApp e os intervalos de alerta devem
-  ser configurados pela aba Configuracoes.
+- A URL da API, a chave, o destino do WhatsApp, os intervalos de alerta e os
+  parametros do motor devem ser configurados pela aba Configuracoes.
 - O arquivo configuracoes_sensiveis.dat esta no .gitignore e nao deve ser
   enviado ao GitHub.

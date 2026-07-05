@@ -2,13 +2,21 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta
 import ipaddress
+import math
 import queue
 import tkinter as tk
 from tkinter import messagebox, ttk
 from urllib.parse import urlparse
 
-from equipment_store import DEFAULT_EQUIPMENT_GROUP, EquipmentRecord, EquipmentStore
+from equipment_store import (
+    DEFAULT_EQUIPMENT_GROUP,
+    DEFAULT_PING_INTERVAL_SECONDS,
+    EquipmentRecord,
+    EquipmentStore,
+)
 from notification_config import format_thresholds_text, parse_thresholds_text
 from outage_notifier import OutageNotifier
 from ping_monitor import EquipmentMonitor, PingResult
@@ -16,6 +24,40 @@ from secure_settings import NotificationSettings, SecureSettingsStore, SettingsS
 
 
 GROUP_FILTER_ALL = "Todos os grupos"
+STATUS_FILTER_ALL = "Todos"
+STATUS_WAITING = "Aguardando"
+STATUS_ONLINE = "Online"
+STATUS_OFFLINE = "Offline"
+STATUS_UNSTABLE = "Instavel"
+STATUS_FLAPPING = "Oscilando"
+STATUS_MAINTENANCE = "Manutencao"
+STATUS_FILTER_OPTIONS = (
+    STATUS_FILTER_ALL,
+    STATUS_ONLINE,
+    STATUS_OFFLINE,
+    STATUS_UNSTABLE,
+    STATUS_FLAPPING,
+    STATUS_WAITING,
+    STATUS_MAINTENANCE,
+)
+
+
+@dataclass
+class EquipmentRuntimeState:
+    """Estado operacional derivado dos resultados de ping."""
+
+    failure_streak: int = 0
+    confirmed_status: bool | None = None
+    display_status: str = STATUS_WAITING
+    offline_since: datetime | None = None
+    first_failure_at: datetime | None = None
+    last_checked_at: datetime | None = None
+    last_latency_ms: float | None = None
+    last_error: str = ""
+    last_event: str = "Aguardando primeira leitura"
+    transition_times: list[datetime] = field(default_factory=list)
+    is_flapping: bool = False
+    maintenance_until: datetime | None = None
 
 
 class NetworkMonitorApp(tk.Tk):
@@ -25,8 +67,8 @@ class NetworkMonitorApp(tk.Tk):
         super().__init__()
 
         self.title("Monitor de Equipamentos na Rede")
-        self.geometry("850x500")
-        self.minsize(720, 420)
+        self.geometry("1180x760")
+        self.minsize(980, 620)
 
         # A fila recebe resultados vindos das threads de ping. O Tkinter so deve
         # ser atualizado pela thread principal, por isso a UI consulta essa fila.
@@ -38,6 +80,8 @@ class NetworkMonitorApp(tk.Tk):
         self._group_by_ip: dict[str, str] = {}
         self._visible_ips: set[str] = set()
         self._last_status: dict[str, bool] = {}
+        self._runtime_by_ip: dict[str, EquipmentRuntimeState] = {}
+        self._event_history: list[tuple[datetime, str, str, str]] = []
         self._store = EquipmentStore()
         self._settings_store = SecureSettingsStore()
         self._settings_load_error: str | None = None
@@ -47,13 +91,37 @@ class NetworkMonitorApp(tk.Tk):
         self.name_var = tk.StringVar()
         self.ip_var = tk.StringVar()
         self.group_var = tk.StringVar(value=DEFAULT_EQUIPMENT_GROUP)
+        self.ping_interval_var = tk.StringVar(
+            value=self._format_seconds(DEFAULT_PING_INTERVAL_SECONDS)
+        )
         self.group_filter_var = tk.StringVar(value=GROUP_FILTER_ALL)
+        self.status_filter_var = tk.StringVar(value=STATUS_FILTER_ALL)
+        self.search_var = tk.StringVar()
+        self.maintenance_minutes_var = tk.StringVar(value="60")
         self.summary_var = tk.StringVar(value="Nenhum equipamento monitorado")
+        self.dashboard_vars = {
+            "total": tk.StringVar(value="0"),
+            "online": tk.StringVar(value="0"),
+            "offline": tk.StringVar(value="0"),
+            "unstable": tk.StringVar(value="0"),
+            "flapping": tk.StringVar(value="0"),
+            "waiting": tk.StringVar(value="0"),
+            "maintenance": tk.StringVar(value="0"),
+        }
         self.api_url_var = tk.StringVar(value=self._notification_settings.api_url)
         self.whatsapp_number_var = tk.StringVar(value=self._notification_settings.whatsapp_number)
         self.api_key_var = tk.StringVar(value=self._notification_settings.api_key)
         self.notification_intervals_var = tk.StringVar(
             value=format_thresholds_text(self._notification_settings.thresholds_minutes)
+        )
+        self.offline_failure_threshold_var = tk.StringVar(
+            value=str(self._notification_settings.offline_failure_threshold)
+        )
+        self.flapping_transition_count_var = tk.StringVar(
+            value=str(self._notification_settings.flapping_transition_count)
+        )
+        self.flapping_window_minutes_var = tk.StringVar(
+            value=str(self._notification_settings.flapping_window_minutes)
         )
         self.show_api_key_var = tk.BooleanVar(value=False)
         self.settings_status_var = tk.StringVar(value=self._build_settings_status())
@@ -76,6 +144,9 @@ class NetworkMonitorApp(tk.Tk):
         style.configure("TLabel", background="#f7f8fa", font=("Segoe UI", 10))
         style.configure("Title.TLabel", font=("Segoe UI", 15, "bold"))
         style.configure("Summary.TLabel", foreground="#4b5563")
+        style.configure("Card.TFrame", background="#ffffff", relief="solid", borderwidth=1)
+        style.configure("CardTitle.TLabel", background="#ffffff", foreground="#4b5563")
+        style.configure("CardValue.TLabel", background="#ffffff", font=("Segoe UI", 16, "bold"))
         style.configure("TButton", font=("Segoe UI", 10))
         style.configure("Treeview", rowheight=30, font=("Segoe UI", 10))
         style.configure("Treeview.Heading", font=("Segoe UI", 10, "bold"))
@@ -99,11 +170,17 @@ class NetworkMonitorApp(tk.Tk):
         notebook.add(root, text="Monitoramento")
         notebook.add(settings_tab, text="Configuracoes")
 
-        root.columnconfigure(0, weight=1)
-        root.rowconfigure(3, weight=1)
+        self._build_monitoring_tab(root)
+        self._build_settings_tab(settings_tab)
 
-        header = ttk.Frame(root)
-        header.grid(row=0, column=0, sticky="ew", pady=(0, 12))
+    def _build_monitoring_tab(self, parent: ttk.Frame) -> None:
+        """Cria a aba principal de operacao."""
+
+        parent.columnconfigure(0, weight=1)
+        parent.rowconfigure(4, weight=1)
+
+        header = ttk.Frame(parent)
+        header.grid(row=0, column=0, sticky="ew", pady=(0, 10))
         header.columnconfigure(0, weight=1)
 
         ttk.Label(header, text="Monitor de Equipamentos", style="Title.TLabel").grid(
@@ -113,8 +190,10 @@ class NetworkMonitorApp(tk.Tk):
             row=1, column=0, sticky="w", pady=(4, 0)
         )
 
-        form = ttk.LabelFrame(root, text="Novo equipamento", padding=12)
-        form.grid(row=1, column=0, sticky="ew", pady=(0, 12))
+        self._build_dashboard_cards(parent)
+
+        form = ttk.LabelFrame(parent, text="Novo equipamento", padding=12)
+        form.grid(row=2, column=0, sticky="ew", pady=(0, 10))
         form.columnconfigure(1, weight=1)
         form.columnconfigure(3, weight=1)
 
@@ -129,85 +208,265 @@ class NetworkMonitorApp(tk.Tk):
 
         ttk.Label(form, text="Grupo").grid(row=1, column=0, sticky="w", padx=(0, 8))
         self.group_entry = ttk.Combobox(form, textvariable=self.group_var)
-        self.group_entry.grid(
-            row=1,
-            column=1,
-            columnspan=3,
-            sticky="ew",
-            padx=(0, 12),
-            pady=(10, 0),
-        )
+        self.group_entry.grid(row=1, column=1, sticky="ew", padx=(0, 12), pady=(10, 0))
         self.group_entry.bind("<Return>", lambda _event: self._add_equipment())
+
+        ttk.Label(form, text="Ping (s)").grid(row=1, column=2, sticky="w", padx=(0, 8))
+        ping_entry = ttk.Entry(form, textvariable=self.ping_interval_var, width=10)
+        ping_entry.grid(row=1, column=3, sticky="w", pady=(10, 0))
+        ping_entry.bind("<Return>", lambda _event: self._add_equipment())
 
         ttk.Button(form, text="Adicionar", command=self._add_equipment).grid(
             row=0, column=4, rowspan=2, sticky="nsew"
         )
 
-        filters = ttk.Frame(root)
-        filters.grid(row=2, column=0, sticky="ew", pady=(0, 12))
+        filters = ttk.LabelFrame(parent, text="Filtros", padding=10)
+        filters.grid(row=3, column=0, sticky="ew", pady=(0, 10))
         filters.columnconfigure(1, weight=1)
+        filters.columnconfigure(3, weight=1)
+        filters.columnconfigure(5, weight=2)
 
-        ttk.Label(filters, text="Visualizar grupo").grid(
-            row=0, column=0, sticky="w", padx=(0, 8)
-        )
+        ttk.Label(filters, text="Grupo").grid(row=0, column=0, sticky="w", padx=(0, 8))
         self.group_filter_combo = ttk.Combobox(
             filters,
             textvariable=self.group_filter_var,
             state="readonly",
             values=(GROUP_FILTER_ALL,),
         )
-        self.group_filter_combo.grid(row=0, column=1, sticky="ew", padx=(0, 8))
-        self.group_filter_combo.bind(
-            "<<ComboboxSelected>>",
-            lambda _event: self._apply_group_filter(),
+        self.group_filter_combo.grid(row=0, column=1, sticky="ew", padx=(0, 12))
+        self.group_filter_combo.bind("<<ComboboxSelected>>", lambda _event: self._apply_filters())
+
+        ttk.Label(filters, text="Status").grid(row=0, column=2, sticky="w", padx=(0, 8))
+        self.status_filter_combo = ttk.Combobox(
+            filters,
+            textvariable=self.status_filter_var,
+            state="readonly",
+            values=STATUS_FILTER_OPTIONS,
         )
-        ttk.Button(filters, text="Todos", command=self._clear_group_filter).grid(
-            row=0, column=2, sticky="e"
+        self.status_filter_combo.grid(row=0, column=3, sticky="ew", padx=(0, 12))
+        self.status_filter_combo.bind("<<ComboboxSelected>>", lambda _event: self._apply_filters())
+
+        ttk.Label(filters, text="Busca").grid(row=0, column=4, sticky="w", padx=(0, 8))
+        search_entry = ttk.Entry(filters, textvariable=self.search_var)
+        search_entry.grid(row=0, column=5, sticky="ew", padx=(0, 12))
+        search_entry.bind("<KeyRelease>", lambda _event: self._apply_filters())
+
+        ttk.Button(filters, text="Limpar", command=self._clear_filters).grid(
+            row=0, column=6, sticky="e"
         )
 
-        table_frame = ttk.Frame(root)
-        table_frame.grid(row=3, column=0, sticky="nsew")
+        content = ttk.Frame(parent)
+        content.grid(row=4, column=0, sticky="nsew")
+        content.columnconfigure(1, weight=1)
+        content.rowconfigure(0, weight=1)
+
+        self._build_group_summary(content)
+        self._build_equipment_table(content)
+        self._build_recent_events(parent)
+        self._build_monitoring_actions(parent)
+
+        name_entry.focus_set()
+
+    def _build_dashboard_cards(self, parent: ttk.Frame) -> None:
+        """Monta os cards de totais operacionais."""
+
+        dashboard = ttk.Frame(parent)
+        dashboard.grid(row=1, column=0, sticky="ew", pady=(0, 10))
+
+        cards = (
+            ("Total", "total"),
+            ("Online", "online"),
+            ("Offline", "offline"),
+            ("Instavel", "unstable"),
+            ("Oscilando", "flapping"),
+            ("Aguardando", "waiting"),
+            ("Manutencao", "maintenance"),
+        )
+
+        for column, (title, key) in enumerate(cards):
+            dashboard.columnconfigure(column, weight=1)
+            card = ttk.Frame(dashboard, style="Card.TFrame", padding=(10, 8))
+            card.grid(row=0, column=column, sticky="ew", padx=(0, 8))
+            ttk.Label(card, text=title, style="CardTitle.TLabel").grid(row=0, column=0, sticky="w")
+            ttk.Label(card, textvariable=self.dashboard_vars[key], style="CardValue.TLabel").grid(
+                row=1,
+                column=0,
+                sticky="w",
+            )
+
+    def _build_group_summary(self, parent: ttk.Frame) -> None:
+        """Cria o resumo por grupo."""
+
+        group_frame = ttk.LabelFrame(parent, text="Resumo por grupo", padding=8)
+        group_frame.grid(row=0, column=0, sticky="nsew", padx=(0, 10))
+        group_frame.rowconfigure(0, weight=1)
+
+        columns = ("group", "total", "online", "offline", "flapping", "waiting")
+        self.group_summary_tree = ttk.Treeview(
+            group_frame,
+            columns=columns,
+            show="headings",
+            height=8,
+            selectmode="browse",
+        )
+        headings = {
+            "group": "Grupo",
+            "total": "Total",
+            "online": "On",
+            "offline": "Off",
+            "flapping": "Osc.",
+            "waiting": "Ag.",
+        }
+        widths = {
+            "group": 140,
+            "total": 54,
+            "online": 48,
+            "offline": 48,
+            "flapping": 48,
+            "waiting": 48,
+        }
+        for column in columns:
+            self.group_summary_tree.heading(column, text=headings[column])
+            self.group_summary_tree.column(
+                column,
+                width=widths[column],
+                minwidth=40,
+                anchor="center" if column != "group" else "w",
+                stretch=column == "group",
+            )
+
+        self.group_summary_tree.grid(row=0, column=0, sticky="nsew")
+        self.group_summary_tree.bind("<<TreeviewSelect>>", self._select_group_from_summary)
+
+    def _build_equipment_table(self, parent: ttk.Frame) -> None:
+        """Cria a tabela principal de equipamentos."""
+
+        table_frame = ttk.Frame(parent)
+        table_frame.grid(row=0, column=1, sticky="nsew")
         table_frame.columnconfigure(0, weight=1)
         table_frame.rowconfigure(0, weight=1)
 
-        columns = ("group", "name", "ip", "status", "latency", "checked_at", "error")
+        columns = (
+            "group",
+            "name",
+            "ip",
+            "status",
+            "latency",
+            "checked_at",
+            "offline_for",
+            "last_event",
+            "error",
+        )
         self.tree = ttk.Treeview(table_frame, columns=columns, show="headings", selectmode="browse")
-        self.tree.heading("group", text="Grupo")
-        self.tree.heading("name", text="Equipamento")
-        self.tree.heading("ip", text="IP")
-        self.tree.heading("status", text="Status")
-        self.tree.heading("latency", text="Latencia")
-        self.tree.heading("checked_at", text="Ultima leitura")
-        self.tree.heading("error", text="Mensagem")
-
-        self.tree.column("group", width=130, minwidth=100)
-        self.tree.column("name", width=170, minwidth=120)
-        self.tree.column("ip", width=130, minwidth=110)
-        self.tree.column("status", width=100, minwidth=90, anchor="center")
-        self.tree.column("latency", width=90, minwidth=80, anchor="center")
-        self.tree.column("checked_at", width=110, minwidth=100, anchor="center")
-        self.tree.column("error", width=220, minwidth=160)
+        headings = {
+            "group": "Grupo",
+            "name": "Equipamento",
+            "ip": "IP",
+            "status": "Status",
+            "latency": "Latencia",
+            "checked_at": "Ultima leitura",
+            "offline_for": "Tempo offline",
+            "last_event": "Ultimo evento",
+            "error": "Mensagem",
+        }
+        widths = {
+            "group": 130,
+            "name": 170,
+            "ip": 130,
+            "status": 105,
+            "latency": 90,
+            "checked_at": 110,
+            "offline_for": 110,
+            "last_event": 190,
+            "error": 240,
+        }
+        for column in columns:
+            self.tree.heading(column, text=headings[column])
+            self.tree.column(
+                column,
+                width=widths[column],
+                minwidth=80,
+                anchor="center"
+                if column in {"status", "latency", "checked_at", "offline_for"}
+                else "w",
+            )
 
         self.tree.tag_configure("online", foreground="#137333")
         self.tree.tag_configure("offline", foreground="#b3261e")
+        self.tree.tag_configure("unstable", foreground="#b06000")
+        self.tree.tag_configure("flapping", foreground="#8a4b00")
+        self.tree.tag_configure("maintenance", foreground="#4b5563")
         self.tree.tag_configure("waiting", foreground="#5f6368")
 
-        scrollbar = ttk.Scrollbar(table_frame, orient="vertical", command=self.tree.yview)
-        self.tree.configure(yscrollcommand=scrollbar.set)
+        y_scrollbar = ttk.Scrollbar(table_frame, orient="vertical", command=self.tree.yview)
+        x_scrollbar = ttk.Scrollbar(table_frame, orient="horizontal", command=self.tree.xview)
+        self.tree.configure(yscrollcommand=y_scrollbar.set, xscrollcommand=x_scrollbar.set)
 
         self.tree.grid(row=0, column=0, sticky="nsew")
-        scrollbar.grid(row=0, column=1, sticky="ns")
+        y_scrollbar.grid(row=0, column=1, sticky="ns")
+        x_scrollbar.grid(row=1, column=0, sticky="ew")
 
-        actions = ttk.Frame(root)
-        actions.grid(row=4, column=0, sticky="ew", pady=(12, 0))
-        actions.columnconfigure(0, weight=1)
+    def _build_recent_events(self, parent: ttk.Frame) -> None:
+        """Cria a lista curta de eventos recentes."""
 
-        ttk.Button(actions, text="Remover selecionado", command=self._remove_selected).grid(
-            row=0, column=1, sticky="e"
+        events_frame = ttk.LabelFrame(parent, text="Eventos recentes", padding=8)
+        events_frame.grid(row=5, column=0, sticky="ew", pady=(10, 0))
+        events_frame.columnconfigure(0, weight=1)
+
+        columns = ("time", "equipment", "event", "group")
+        self.events_tree = ttk.Treeview(
+            events_frame,
+            columns=columns,
+            show="headings",
+            height=4,
+            selectmode="none",
         )
+        self.events_tree.heading("time", text="Hora")
+        self.events_tree.heading("equipment", text="Equipamento")
+        self.events_tree.heading("event", text="Evento")
+        self.events_tree.heading("group", text="Grupo")
+        self.events_tree.column("time", width=90, minwidth=80, anchor="center")
+        self.events_tree.column("equipment", width=190, minwidth=120)
+        self.events_tree.column("event", width=520, minwidth=220)
+        self.events_tree.column("group", width=150, minwidth=100)
+        self.events_tree.grid(row=0, column=0, sticky="ew")
 
-        self._build_settings_tab(settings_tab)
-        name_entry.focus_set()
+    def _build_monitoring_actions(self, parent: ttk.Frame) -> None:
+        """Cria a faixa de acoes da aba principal."""
+
+        actions = ttk.Frame(parent)
+        actions.grid(row=6, column=0, sticky="ew", pady=(10, 0))
+        actions.columnconfigure(5, weight=1)
+
+        ttk.Label(actions, text="Manutencao (min)").grid(
+            row=0,
+            column=0,
+            sticky="w",
+            padx=(0, 8),
+        )
+        ttk.Entry(actions, textvariable=self.maintenance_minutes_var, width=8).grid(
+            row=0,
+            column=1,
+            sticky="w",
+            padx=(0, 8),
+        )
+        ttk.Button(actions, text="Silenciar alertas", command=self._start_maintenance).grid(
+            row=0,
+            column=2,
+            sticky="w",
+            padx=(0, 8),
+        )
+        ttk.Button(actions, text="Encerrar manutencao", command=self._end_maintenance).grid(
+            row=0,
+            column=3,
+            sticky="w",
+            padx=(0, 8),
+        )
+        ttk.Button(actions, text="Remover selecionado", command=self._remove_selected).grid(
+            row=0,
+            column=6,
+            sticky="e",
+        )
 
     def _build_settings_tab(self, parent: ttk.Frame) -> None:
         """Cria a aba com as configuracoes da Evolution API."""
@@ -248,15 +507,45 @@ class NetworkMonitorApp(tk.Tk):
             pady=(0, 10),
         )
 
+        ttk.Label(form, text="Falhas p/ offline").grid(
+            row=4, column=0, sticky="w", padx=(0, 8)
+        )
+        ttk.Entry(form, textvariable=self.offline_failure_threshold_var, width=12).grid(
+            row=4,
+            column=1,
+            sticky="w",
+            pady=(0, 10),
+        )
+
+        ttk.Label(form, text="Oscilar apos mudancas").grid(
+            row=5, column=0, sticky="w", padx=(0, 8)
+        )
+        ttk.Entry(form, textvariable=self.flapping_transition_count_var, width=12).grid(
+            row=5,
+            column=1,
+            sticky="w",
+            pady=(0, 10),
+        )
+
+        ttk.Label(form, text="Janela oscilacao (min)").grid(
+            row=6, column=0, sticky="w", padx=(0, 8)
+        )
+        ttk.Entry(form, textvariable=self.flapping_window_minutes_var, width=12).grid(
+            row=6,
+            column=1,
+            sticky="w",
+            pady=(0, 10),
+        )
+
         ttk.Checkbutton(
             form,
             text="Mostrar chave",
             variable=self.show_api_key_var,
             command=self._toggle_api_key_visibility,
-        ).grid(row=4, column=1, sticky="w", pady=(0, 10))
+        ).grid(row=7, column=1, sticky="w", pady=(0, 10))
 
         actions = ttk.Frame(form)
-        actions.grid(row=5, column=0, columnspan=2, sticky="ew")
+        actions.grid(row=8, column=0, columnspan=2, sticky="ew")
         actions.columnconfigure(0, weight=1)
 
         ttk.Label(actions, textvariable=self.settings_status_var, style="Summary.TLabel").grid(
@@ -280,6 +569,9 @@ class NetworkMonitorApp(tk.Tk):
             "Chave da API: use a apikey/chave da instancia no painel da Evolution API.\n\n"
             "Alertar apos: informe os minutos de queda que devem gerar notificacao, "
             "separados por virgula. Exemplo: 1, 5, 15, 30.\n\n"
+            "Falhas p/ offline: quantidade de pings seguidos sem resposta antes de "
+            "confirmar queda. Oscilacao: quantidade de mudancas online/offline dentro "
+            "da janela em minutos.\n\n"
             "Numero ou grupo: para telefone, informe o numero com DDI e DDD. Para grupo, use o JID "
             "terminado em @g.us. Uma forma pratica de descobrir o grupo e chamar na Evolution API: "
             "GET /group/fetchAllGroups/NOME_DA_INSTANCIA?getParticipants=false com o header apikey. "
@@ -321,8 +613,20 @@ class NetworkMonitorApp(tk.Tk):
 
         try:
             thresholds_minutes = parse_thresholds_text(self.notification_intervals_var.get())
+            offline_failure_threshold = self._parse_positive_int(
+                self.offline_failure_threshold_var.get(),
+                "Falhas p/ offline",
+            )
+            flapping_transition_count = self._parse_positive_int(
+                self.flapping_transition_count_var.get(),
+                "Oscilar apos mudancas",
+            )
+            flapping_window_minutes = self._parse_positive_int(
+                self.flapping_window_minutes_var.get(),
+                "Janela oscilacao",
+            )
         except ValueError as exc:
-            messagebox.showwarning("Intervalos invalidos", str(exc))
+            messagebox.showwarning("Configuracao invalida", str(exc))
             return
 
         settings = NotificationSettings(
@@ -330,6 +634,9 @@ class NetworkMonitorApp(tk.Tk):
             api_key=self.api_key_var.get().strip(),
             whatsapp_number=self.whatsapp_number_var.get().strip(),
             thresholds_minutes=thresholds_minutes,
+            offline_failure_threshold=offline_failure_threshold,
+            flapping_transition_count=flapping_transition_count,
+            flapping_window_minutes=flapping_window_minutes,
         )
 
         if not settings.is_complete():
@@ -356,6 +663,10 @@ class NetworkMonitorApp(tk.Tk):
         self._settings_load_error = None
         self._outage_notifier.update_settings(settings)
         self.notification_intervals_var.set(format_thresholds_text(thresholds_minutes))
+        self.offline_failure_threshold_var.set(str(offline_failure_threshold))
+        self.flapping_transition_count_var.set(str(flapping_transition_count))
+        self.flapping_window_minutes_var.set(str(flapping_window_minutes))
+        self._refresh_live_rows()
         self.settings_status_var.set("Configuracoes salvas com criptografia local.")
         messagebox.showinfo("Configuracoes salvas", "As notificacoes foram configuradas.")
 
@@ -365,6 +676,11 @@ class NetworkMonitorApp(tk.Tk):
         name = self.name_var.get().strip()
         ip_address = self.ip_var.get().strip()
         group = self._normalize_group(self.group_var.get())
+        try:
+            ping_interval_seconds = self._parse_ping_interval(self.ping_interval_var.get())
+        except ValueError as exc:
+            messagebox.showwarning("Intervalo invalido", str(exc))
+            return
 
         if not name or not ip_address:
             messagebox.showwarning("Campos obrigatorios", "Informe o nome e o IP do equipamento.")
@@ -378,12 +694,13 @@ class NetworkMonitorApp(tk.Tk):
             messagebox.showwarning("IP duplicado", "Esse IP ja esta sendo monitorado.")
             return
 
-        self._start_monitoring(name, ip_address, group)
+        self._start_monitoring(name, ip_address, group, ping_interval_seconds)
         self._save_equipment_list()
 
         self.name_var.set("")
         self.ip_var.set("")
         self.group_var.set(group)
+        self.ping_interval_var.set(self._format_seconds(ping_interval_seconds))
         self._update_summary()
 
     def _remove_selected(self) -> None:
@@ -402,13 +719,16 @@ class NetworkMonitorApp(tk.Tk):
 
         self._items_by_ip.pop(ip_address, None)
         self._last_status.pop(ip_address, None)
+        self._runtime_by_ip.pop(ip_address, None)
         self._group_by_ip.pop(ip_address, None)
         self._visible_ips.discard(ip_address)
         self._outage_notifier.clear(ip_address)
         self.tree.delete(item_id)
         self._save_equipment_list()
         self._refresh_group_options()
-        self._apply_group_filter()
+        self._apply_filters()
+        self._refresh_dashboard()
+        self._refresh_group_summary()
         self._update_summary()
 
     def _load_saved_equipment(self) -> None:
@@ -426,7 +746,12 @@ class NetworkMonitorApp(tk.Tk):
                 duplicated_ips.append(record.ip_address)
                 continue
 
-            self._start_monitoring(record.name, record.ip_address, record.group)
+            self._start_monitoring(
+                record.name,
+                record.ip_address,
+                record.group,
+                record.ping_interval_seconds,
+            )
 
         self._update_summary()
 
@@ -437,7 +762,13 @@ class NetworkMonitorApp(tk.Tk):
                 "por IP invalido ou duplicado.",
             )
 
-    def _start_monitoring(self, name: str, ip_address: str, group: str) -> None:
+    def _start_monitoring(
+        self,
+        name: str,
+        ip_address: str,
+        group: str,
+        ping_interval_seconds: float,
+    ) -> None:
         """Cria a linha na tabela e inicia o ping periodico."""
 
         group = self._normalize_group(group)
@@ -446,13 +777,24 @@ class NetworkMonitorApp(tk.Tk):
             ip_address=ip_address,
             group=group,
             result_callback=self._result_queue.put,
+            interval_seconds=ping_interval_seconds,
         )
         monitor.start()
 
         item_id = self.tree.insert(
             "",
             "end",
-            values=(group, name, ip_address, "Aguardando", "-", "-", ""),
+            values=(
+                group,
+                name,
+                ip_address,
+                STATUS_WAITING,
+                "-",
+                "-",
+                "-",
+                "Aguardando primeira leitura",
+                "",
+            ),
             tags=("waiting",),
         )
 
@@ -460,9 +802,12 @@ class NetworkMonitorApp(tk.Tk):
         self._items_by_ip[ip_address] = item_id
         self._ip_by_item[item_id] = ip_address
         self._group_by_ip[ip_address] = group
+        self._runtime_by_ip[ip_address] = EquipmentRuntimeState()
         self._visible_ips.add(ip_address)
         self._refresh_group_options()
-        self._apply_group_filter()
+        self._apply_filters()
+        self._refresh_dashboard()
+        self._refresh_group_summary()
 
     def _save_equipment_list(self) -> None:
         """Salva no arquivo texto os equipamentos monitorados atualmente."""
@@ -472,6 +817,7 @@ class NetworkMonitorApp(tk.Tk):
                 name=monitor.name,
                 ip_address=monitor.ip_address,
                 group=monitor.group,
+                ping_interval_seconds=monitor.interval_seconds,
             )
             for monitor in self._monitors.values()
         ]
@@ -481,6 +827,7 @@ class NetworkMonitorApp(tk.Tk):
         """Agenda a leitura periodica dos resultados vindos das threads."""
 
         self._process_result_queue()
+        self._refresh_live_rows()
         self.after(200, self._schedule_queue_processing)
 
     def _process_result_queue(self) -> None:
@@ -495,35 +842,363 @@ class NetworkMonitorApp(tk.Tk):
             self._apply_ping_result(result)
 
     def _apply_ping_result(self, result: PingResult) -> None:
-        """Atualiza a linha de um equipamento com o resultado mais recente."""
+        """Atualiza o estado operacional com o resultado mais recente."""
 
         item_id = self._items_by_ip.get(result.ip_address)
         if item_id is None:
             return
 
-        status = "Online" if result.is_online else "Offline"
-        tag = "online" if result.is_online else "offline"
-        latency = f"{result.latency_ms:.0f} ms" if result.latency_ms is not None else "-"
-        checked_at = result.checked_at.strftime("%H:%M:%S")
-        message = "" if result.is_online else (result.error or "Sem resposta")
+        state = self._runtime_by_ip.setdefault(result.ip_address, EquipmentRuntimeState())
+        state.last_checked_at = result.checked_at
+        state.last_latency_ms = result.latency_ms
+        state.last_error = "" if result.is_online else (result.error or "Sem resposta")
+
+        maintenance_active = self._is_in_maintenance(state, result.checked_at)
+        failure_threshold = self._notification_settings.offline_failure_threshold
+
+        if result.is_online:
+            state.failure_streak = 0
+            state.first_failure_at = None
+            if state.confirmed_status is not True:
+                previous_status = state.confirmed_status
+                state.confirmed_status = True
+                state.offline_since = None
+                event = STATUS_ONLINE if previous_status is None else "Conexao restabelecida"
+                self._register_transition(
+                    result,
+                    state,
+                    event,
+                    count_for_flapping=previous_status is not None,
+                )
+                if maintenance_active:
+                    self._outage_notifier.clear(result.ip_address)
+                else:
+                    self._outage_notifier.handle_ping_result(result)
+        else:
+            state.failure_streak += 1
+            if state.first_failure_at is None:
+                state.first_failure_at = result.checked_at
+
+            if state.failure_streak < failure_threshold:
+                state.last_event = (
+                    f"Falha {state.failure_streak}/{failure_threshold} "
+                    f"em {result.checked_at:%H:%M:%S}"
+                )
+            else:
+                if state.confirmed_status is not False:
+                    previous_status = state.confirmed_status
+                    state.confirmed_status = False
+                    state.offline_since = state.first_failure_at or result.checked_at
+                    self._register_transition(
+                        result,
+                        state,
+                        "Offline confirmado",
+                        count_for_flapping=previous_status is not None,
+                    )
+
+                if maintenance_active:
+                    self._outage_notifier.clear(result.ip_address)
+                else:
+                    self._outage_notifier.handle_ping_result(result)
+
+        if state.confirmed_status is not None:
+            self._last_status[result.ip_address] = state.confirmed_status
+
+        self._update_display_status(result.ip_address)
+        self._render_equipment_row(result.ip_address)
+        self._refresh_dashboard()
+        self._refresh_group_summary()
+        self._apply_filters()
+        self._update_summary()
+
+    def _register_transition(
+        self,
+        result: PingResult,
+        state: EquipmentRuntimeState,
+        event: str,
+        count_for_flapping: bool = True,
+    ) -> None:
+        """Registra uma mudanca confirmada de estado."""
+
+        if count_for_flapping:
+            state.transition_times.append(result.checked_at)
+            self._prune_transitions(state, result.checked_at)
+
+        was_flapping = state.is_flapping
+        state.is_flapping = len(state.transition_times) >= (
+            self._notification_settings.flapping_transition_count
+        )
+        state.last_event = f"{event} as {result.checked_at:%H:%M:%S}"
+        self._record_event(result.ip_address, event, result.checked_at)
+
+        if state.is_flapping and not was_flapping:
+            event_text = "Oscilacao detectada"
+            state.last_event = f"{event_text} as {result.checked_at:%H:%M:%S}"
+            self._record_event(result.ip_address, event_text, result.checked_at)
+
+    def _prune_transitions(self, state: EquipmentRuntimeState, now: datetime) -> None:
+        """Remove mudancas fora da janela de oscilacao."""
+
+        window = timedelta(minutes=self._notification_settings.flapping_window_minutes)
+        state.transition_times = [
+            changed_at for changed_at in state.transition_times if now - changed_at <= window
+        ]
+
+    def _update_display_status(self, ip_address: str) -> None:
+        """Atualiza o status visual derivado do estado confirmado."""
+
+        state = self._runtime_by_ip.get(ip_address)
+        if state is None:
+            return
+
+        now = datetime.now()
+        self._prune_transitions(state, now)
+        state.is_flapping = len(state.transition_times) >= (
+            self._notification_settings.flapping_transition_count
+        )
+
+        if self._is_in_maintenance(state, now):
+            state.display_status = STATUS_MAINTENANCE
+        elif state.is_flapping:
+            state.display_status = STATUS_FLAPPING
+        elif state.confirmed_status is True:
+            state.display_status = STATUS_UNSTABLE if state.failure_streak else STATUS_ONLINE
+        elif state.confirmed_status is False:
+            state.display_status = STATUS_OFFLINE
+        else:
+            state.display_status = STATUS_WAITING
+
+    def _render_equipment_row(self, ip_address: str) -> None:
+        """Renderiza uma linha da tabela com o estado operacional atual."""
+
+        item_id = self._items_by_ip.get(ip_address)
+        monitor = self._monitors.get(ip_address)
+        state = self._runtime_by_ip.get(ip_address)
+        if item_id is None or monitor is None or state is None:
+            return
+
+        latency = f"{state.last_latency_ms:.0f} ms" if state.last_latency_ms is not None else "-"
+        checked_at = state.last_checked_at.strftime("%H:%M:%S") if state.last_checked_at else "-"
+        offline_for = (
+            self._format_elapsed(datetime.now() - state.offline_since)
+            if state.offline_since and state.confirmed_status is False
+            else "-"
+        )
 
         self.tree.item(
             item_id,
             values=(
-                result.group,
-                result.name,
-                result.ip_address,
-                status,
+                monitor.group,
+                monitor.name,
+                monitor.ip_address,
+                state.display_status,
                 latency,
                 checked_at,
-                message,
+                offline_for,
+                state.last_event,
+                self._build_row_message(state),
             ),
-            tags=(tag,),
+            tags=(self._status_tag(state.display_status),),
         )
 
-        self._last_status[result.ip_address] = result.is_online
-        self._outage_notifier.handle_ping_result(result)
+    def _build_row_message(self, state: EquipmentRuntimeState) -> str:
+        """Monta a mensagem curta exibida na tabela."""
+
+        if self._is_in_maintenance(state, datetime.now()):
+            remaining = state.maintenance_until - datetime.now() if state.maintenance_until else None
+            remaining_text = self._format_elapsed(remaining) if remaining else "-"
+            return f"Alertas silenciados por {remaining_text}"
+
+        if state.display_status == STATUS_UNSTABLE:
+            threshold = self._notification_settings.offline_failure_threshold
+            return f"Falha {state.failure_streak}/{threshold}: {state.last_error}"
+
+        if state.display_status in {STATUS_OFFLINE, STATUS_FLAPPING}:
+            return state.last_error or "Sem resposta"
+
+        return ""
+
+    def _refresh_live_rows(self) -> None:
+        """Atualiza duracoes e paineis mesmo quando nenhum ping novo chega."""
+
+        for ip_address in list(self._runtime_by_ip):
+            self._update_display_status(ip_address)
+            self._render_equipment_row(ip_address)
+
+        self._refresh_dashboard()
+        self._refresh_group_summary()
         self._update_summary()
+
+    def _refresh_dashboard(self) -> None:
+        """Atualiza os cards de status."""
+
+        counts = self._count_statuses(list(self._monitors))
+        self.dashboard_vars["total"].set(str(len(self._monitors)))
+        self.dashboard_vars["online"].set(str(counts[STATUS_ONLINE]))
+        self.dashboard_vars["offline"].set(str(counts[STATUS_OFFLINE]))
+        self.dashboard_vars["unstable"].set(str(counts[STATUS_UNSTABLE]))
+        self.dashboard_vars["flapping"].set(str(counts[STATUS_FLAPPING]))
+        self.dashboard_vars["waiting"].set(str(counts[STATUS_WAITING]))
+        self.dashboard_vars["maintenance"].set(str(counts[STATUS_MAINTENANCE]))
+
+    def _refresh_group_summary(self) -> None:
+        """Recalcula a tabela de grupos."""
+
+        if not hasattr(self, "group_summary_tree"):
+            return
+
+        for item_id in self.group_summary_tree.get_children():
+            self.group_summary_tree.delete(item_id)
+
+        groups = sorted(set(self._group_by_ip.values()) or {DEFAULT_EQUIPMENT_GROUP})
+        for group in groups:
+            ips = [
+                ip_address
+                for ip_address, equipment_group in self._group_by_ip.items()
+                if equipment_group == group
+            ]
+            counts = self._count_statuses(ips)
+            self.group_summary_tree.insert(
+                "",
+                "end",
+                iid=f"group::{group}",
+                values=(
+                    group,
+                    len(ips),
+                    counts[STATUS_ONLINE],
+                    counts[STATUS_OFFLINE],
+                    counts[STATUS_FLAPPING],
+                    counts[STATUS_WAITING],
+                ),
+            )
+
+    def _count_statuses(self, ip_addresses: list[str]) -> dict[str, int]:
+        """Conta status visuais para os IPs informados."""
+
+        counts = {
+            STATUS_ONLINE: 0,
+            STATUS_OFFLINE: 0,
+            STATUS_UNSTABLE: 0,
+            STATUS_FLAPPING: 0,
+            STATUS_WAITING: 0,
+            STATUS_MAINTENANCE: 0,
+        }
+        for ip_address in ip_addresses:
+            state = self._runtime_by_ip.get(ip_address)
+            status = state.display_status if state else STATUS_WAITING
+            counts[status] = counts.get(status, 0) + 1
+
+        return counts
+
+    def _record_event(self, ip_address: str, event: str, happened_at: datetime) -> None:
+        """Adiciona um evento ao historico recente."""
+
+        monitor = self._monitors.get(ip_address)
+        if monitor is None:
+            return
+
+        self._event_history.insert(0, (happened_at, monitor.name, event, monitor.group))
+        del self._event_history[50:]
+        self._refresh_event_history()
+
+    def _refresh_event_history(self) -> None:
+        """Renderiza os eventos recentes."""
+
+        if not hasattr(self, "events_tree"):
+            return
+
+        for item_id in self.events_tree.get_children():
+            self.events_tree.delete(item_id)
+
+        for happened_at, name, event, group in self._event_history[:8]:
+            self.events_tree.insert(
+                "",
+                "end",
+                values=(happened_at.strftime("%H:%M:%S"), name, event, group),
+            )
+
+    def _status_tag(self, status: str) -> str:
+        """Converte status visual em tag da tabela."""
+
+        return {
+            STATUS_ONLINE: "online",
+            STATUS_OFFLINE: "offline",
+            STATUS_UNSTABLE: "unstable",
+            STATUS_FLAPPING: "flapping",
+            STATUS_MAINTENANCE: "maintenance",
+            STATUS_WAITING: "waiting",
+        }.get(status, "waiting")
+
+    def _select_group_from_summary(self, _event: tk.Event) -> None:
+        """Filtra a tabela pelo grupo selecionado no resumo."""
+
+        selection = self.group_summary_tree.selection()
+        if not selection:
+            return
+
+        values = self.group_summary_tree.item(selection[0], "values")
+        if not values:
+            return
+
+        self.group_filter_var.set(str(values[0]))
+        self._apply_filters()
+
+    def _start_maintenance(self) -> None:
+        """Silencia alertas do equipamento selecionado por alguns minutos."""
+
+        ip_address = self._get_selected_ip()
+        if ip_address is None:
+            return
+
+        try:
+            minutes = self._parse_positive_int(
+                self.maintenance_minutes_var.get(),
+                "Manutencao",
+            )
+        except ValueError as exc:
+            messagebox.showwarning("Manutencao invalida", str(exc))
+            return
+
+        state = self._runtime_by_ip.setdefault(ip_address, EquipmentRuntimeState())
+        state.maintenance_until = datetime.now() + timedelta(minutes=minutes)
+        state.last_event = f"Manutencao ate {state.maintenance_until:%H:%M:%S}"
+        self._outage_notifier.clear(ip_address)
+        self._record_event(ip_address, f"Manutencao por {minutes} min", datetime.now())
+        self._update_display_status(ip_address)
+        self._render_equipment_row(ip_address)
+        self._refresh_dashboard()
+        self._refresh_group_summary()
+        self._apply_filters()
+
+    def _end_maintenance(self) -> None:
+        """Encerra a janela de manutencao do equipamento selecionado."""
+
+        ip_address = self._get_selected_ip()
+        if ip_address is None:
+            return
+
+        state = self._runtime_by_ip.get(ip_address)
+        if state is None:
+            return
+
+        state.maintenance_until = None
+        state.last_event = f"Manutencao encerrada as {datetime.now():%H:%M:%S}"
+        self._record_event(ip_address, "Manutencao encerrada", datetime.now())
+        self._update_display_status(ip_address)
+        self._render_equipment_row(ip_address)
+        self._refresh_dashboard()
+        self._refresh_group_summary()
+        self._apply_filters()
+
+    def _get_selected_ip(self) -> str | None:
+        """Retorna o IP selecionado na tabela principal."""
+
+        selection = self.tree.selection()
+        if not selection:
+            messagebox.showinfo("Equipamento", "Selecione um equipamento na tabela.")
+            return None
+
+        return self._ip_by_item.get(selection[0])
 
     def _update_summary(self) -> None:
         """Atualiza o texto de resumo no topo da janela."""
@@ -535,23 +1210,21 @@ class NetworkMonitorApp(tk.Tk):
 
         filtered_ips = self._get_filtered_ips()
         visible_total = len(filtered_ips)
-        online = sum(1 for ip_address in filtered_ips if self._last_status.get(ip_address))
-        offline = sum(
-            1 for ip_address in filtered_ips if self._last_status.get(ip_address) is False
-        )
-        waiting = visible_total - online - offline
+        counts = self._count_statuses(filtered_ips)
+        filters: list[str] = []
+        if self.group_filter_var.get() != GROUP_FILTER_ALL:
+            filters.append(f"Grupo: {self.group_filter_var.get()}")
+        if self.status_filter_var.get() != STATUS_FILTER_ALL:
+            filters.append(f"Status: {self.status_filter_var.get()}")
+        if self.search_var.get().strip():
+            filters.append(f"Busca: {self.search_var.get().strip()}")
 
-        selected_group = self.group_filter_var.get()
-        if selected_group == GROUP_FILTER_ALL:
-            self.summary_var.set(
-                f"Monitorando {total} | Online: {online} | "
-                f"Offline: {offline} | Aguardando: {waiting}"
-            )
-            return
+        filter_text = " | ".join(filters) if filters else "Todos os equipamentos"
 
         self.summary_var.set(
-            f"Grupo {selected_group}: {visible_total} de {total} | Online: {online} | "
-            f"Offline: {offline} | Aguardando: {waiting}"
+            f"{filter_text} | Exibindo {visible_total} de {total} | "
+            f"Online: {counts[STATUS_ONLINE]} | Offline: {counts[STATUS_OFFLINE]} | "
+            f"Instavel: {counts[STATUS_UNSTABLE]} | Oscilando: {counts[STATUS_FLAPPING]}"
         )
 
     def _normalize_group(self, value: str) -> str:
@@ -582,19 +1255,19 @@ class NetworkMonitorApp(tk.Tk):
         if self.group_filter_var.get() not in filter_values:
             self.group_filter_var.set(GROUP_FILTER_ALL)
 
-    def _clear_group_filter(self) -> None:
-        """Mostra todos os grupos novamente."""
+    def _clear_filters(self) -> None:
+        """Limpa filtros de grupo, status e busca."""
 
         self.group_filter_var.set(GROUP_FILTER_ALL)
-        self._apply_group_filter()
+        self.status_filter_var.set(STATUS_FILTER_ALL)
+        self.search_var.set("")
+        self._apply_filters()
 
-    def _apply_group_filter(self) -> None:
-        """Mostra na tabela apenas os equipamentos do grupo selecionado."""
+    def _apply_filters(self) -> None:
+        """Aplica filtros de grupo, status e busca."""
 
-        selected_group = self.group_filter_var.get()
         for ip_address, item_id in self._items_by_ip.items():
-            group = self._group_by_ip.get(ip_address, DEFAULT_EQUIPMENT_GROUP)
-            should_show = selected_group == GROUP_FILTER_ALL or group == selected_group
+            should_show = self._matches_filters(ip_address)
 
             if should_show and ip_address not in self._visible_ips:
                 self.tree.reattach(item_id, "", "end")
@@ -605,18 +1278,105 @@ class NetworkMonitorApp(tk.Tk):
 
         self._update_summary()
 
+    def _matches_filters(self, ip_address: str) -> bool:
+        """Indica se um equipamento passa pelos filtros atuais."""
+
+        monitor = self._monitors.get(ip_address)
+        state = self._runtime_by_ip.get(ip_address)
+        if monitor is None:
+            return False
+
+        selected_group = self.group_filter_var.get()
+        if selected_group != GROUP_FILTER_ALL and monitor.group != selected_group:
+            return False
+
+        selected_status = self.status_filter_var.get()
+        status = state.display_status if state else STATUS_WAITING
+        if selected_status != STATUS_FILTER_ALL and status != selected_status:
+            return False
+
+        query = self.search_var.get().strip().lower()
+        if query:
+            searchable_text = f"{monitor.name} {monitor.ip_address} {monitor.group}".lower()
+            if query not in searchable_text:
+                return False
+
+        return True
+
     def _get_filtered_ips(self) -> list[str]:
         """Retorna os IPs considerados pelo resumo atual."""
 
-        selected_group = self.group_filter_var.get()
-        if selected_group == GROUP_FILTER_ALL:
-            return list(self._monitors)
+        return [ip_address for ip_address in self._monitors if self._matches_filters(ip_address)]
 
-        return [
-            ip_address
-            for ip_address, group in self._group_by_ip.items()
-            if group == selected_group
-        ]
+    @staticmethod
+    def _parse_positive_int(value: str, field_name: str) -> int:
+        """Valida um inteiro positivo informado pelo usuario."""
+
+        try:
+            parsed = int(value.strip())
+        except ValueError as exc:
+            raise ValueError(f"{field_name}: use um numero inteiro maior que zero.") from exc
+
+        if parsed <= 0:
+            raise ValueError(f"{field_name}: use um numero inteiro maior que zero.")
+
+        return parsed
+
+    @staticmethod
+    def _parse_ping_interval(value: str) -> float:
+        """Valida o intervalo de ping informado no cadastro."""
+
+        try:
+            parsed = float(value.strip().replace(",", "."))
+        except ValueError as exc:
+            raise ValueError("Informe o intervalo de ping em segundos.") from exc
+
+        if not math.isfinite(parsed):
+            raise ValueError("Informe um intervalo de ping valido.")
+        if parsed < 1:
+            raise ValueError("O intervalo de ping deve ser de pelo menos 1 segundo.")
+        if parsed > 3600:
+            raise ValueError("O intervalo de ping deve ser menor ou igual a 3600 segundos.")
+
+        return parsed
+
+    @staticmethod
+    def _format_seconds(value: float) -> str:
+        """Formata segundos para exibicao."""
+
+        seconds = float(value)
+        if seconds.is_integer():
+            return str(int(seconds))
+
+        return f"{seconds:.2f}".rstrip("0").rstrip(".")
+
+    @staticmethod
+    def _format_elapsed(delta: timedelta) -> str:
+        """Formata uma duracao curta para a interface."""
+
+        total_seconds = max(0, int(delta.total_seconds()))
+        hours, remainder = divmod(total_seconds, 3600)
+        minutes, seconds = divmod(remainder, 60)
+
+        if hours:
+            return f"{hours}h {minutes:02d}m"
+        if minutes:
+            return f"{minutes}m {seconds:02d}s"
+
+        return f"{seconds}s"
+
+    @staticmethod
+    def _is_in_maintenance(state: EquipmentRuntimeState, now: datetime) -> bool:
+        """Confere se uma janela de manutencao ainda esta ativa."""
+
+        if state.maintenance_until is None:
+            return False
+
+        if now >= state.maintenance_until:
+            state.maintenance_until = None
+            return False
+
+        return True
 
     def _on_close(self) -> None:
         """Para os monitores ativos antes de fechar a janela."""

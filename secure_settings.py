@@ -22,6 +22,9 @@ from notification_config import (
 
 SETTINGS_FILE = APP_DIR / "configuracoes_sensiveis.dat"
 CRYPTPROTECT_UI_FORBIDDEN = 0x01
+DEFAULT_OFFLINE_FAILURE_THRESHOLD = 3
+DEFAULT_FLAPPING_TRANSITION_COUNT = 4
+DEFAULT_FLAPPING_WINDOW_MINUTES = 10
 
 
 @dataclass(frozen=True)
@@ -32,6 +35,9 @@ class NotificationSettings:
     api_key: str = ""
     whatsapp_number: str = ""
     thresholds_minutes: tuple[int, ...] = DEFAULT_NOTIFICATION_THRESHOLDS_MINUTES
+    offline_failure_threshold: int = DEFAULT_OFFLINE_FAILURE_THRESHOLD
+    flapping_transition_count: int = DEFAULT_FLAPPING_TRANSITION_COUNT
+    flapping_window_minutes: int = DEFAULT_FLAPPING_WINDOW_MINUTES
 
     def is_complete(self) -> bool:
         """Indica se todos os campos obrigatorios foram preenchidos."""
@@ -72,6 +78,21 @@ class SecureSettingsStore:
             api_key=str(payload.get("api_key", "")).strip(),
             whatsapp_number=str(payload.get("whatsapp_number", "")).strip(),
             thresholds_minutes=_thresholds_from_payload(payload),
+            offline_failure_threshold=_positive_int_from_payload(
+                payload,
+                "offline_failure_threshold",
+                DEFAULT_OFFLINE_FAILURE_THRESHOLD,
+            ),
+            flapping_transition_count=_positive_int_from_payload(
+                payload,
+                "flapping_transition_count",
+                DEFAULT_FLAPPING_TRANSITION_COUNT,
+            ),
+            flapping_window_minutes=_positive_int_from_payload(
+                payload,
+                "flapping_window_minutes",
+                DEFAULT_FLAPPING_WINDOW_MINUTES,
+            ),
         )
 
     def save(self, settings: NotificationSettings) -> None:
@@ -82,6 +103,9 @@ class SecureSettingsStore:
             "api_key": settings.api_key,
             "whatsapp_number": settings.whatsapp_number,
             "thresholds_minutes": list(normalize_thresholds_minutes(settings.thresholds_minutes)),
+            "offline_failure_threshold": int(settings.offline_failure_threshold),
+            "flapping_transition_count": int(settings.flapping_transition_count),
+            "flapping_window_minutes": int(settings.flapping_window_minutes),
         }
         plain_data = json.dumps(payload, ensure_ascii=True).encode("utf-8")
 
@@ -224,3 +248,18 @@ def _thresholds_from_payload(payload: dict[str, object]) -> tuple[int, ...]:
         return normalize_thresholds_minutes(int(value) for value in raw_values)
     except (TypeError, ValueError):
         return DEFAULT_NOTIFICATION_THRESHOLDS_MINUTES
+
+
+def _positive_int_from_payload(
+    payload: dict[str, object],
+    key: str,
+    default: int,
+) -> int:
+    """Carrega um inteiro positivo da configuracao."""
+
+    try:
+        value = int(payload.get(key, default))
+    except (TypeError, ValueError):
+        return default
+
+    return value if value > 0 else default
