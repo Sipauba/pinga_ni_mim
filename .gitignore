@@ -1,0 +1,8 @@
+__pycache__/
+*.py[cod]
+configuracoes_sensiveis.env
+configuracoes_sensiveis.dat
+quedas_log.txt
+build/
+dist/
+*.spec

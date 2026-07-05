@@ -1,0 +1,210 @@
+LEIAME - Monitor de Equipamentos na Rede
+========================================
+
+Esta aplicacao monitora equipamentos da rede usando ping. Ela foi feita em
+Python com interface grafica Tkinter.
+
+
+1. Como executar
+----------------
+
+Abra o PowerShell ou Prompt de Comando na pasta do projeto e execute:
+
+python main.py
+
+Se o comando acima nao funcionar, tente:
+
+py main.py
+
+Se o programa for transformado em executavel com PyInstaller, mantenha o .exe em
+uma pasta fixa e crie apenas um atalho para ele na area de trabalho.
+
+Os arquivos locais equipamentos.txt e configuracoes_sensiveis.dat serao criados
+na mesma pasta do executavel.
+
+O arquivo quedas_log.txt tambem sera criado nessa pasta quando a primeira queda
+for detectada.
+
+
+2. Como adicionar equipamentos
+------------------------------
+
+Na tela principal existem dois campos:
+
+- Nome: identificacao do equipamento, por exemplo "Servidor", "Roteador" ou
+  "Computador Financeiro".
+- IP: endereco IP do equipamento, por exemplo "192.168.0.10".
+
+Depois de preencher os campos, clique em "Adicionar".
+
+O equipamento sera inserido na tabela e o programa comecara a fazer ping
+automaticamente a cada 1 segundo.
+
+
+3. O que aparece na tabela
+--------------------------
+
+A tabela mostra:
+
+- Equipamento: nome informado pelo usuario.
+- IP: endereco monitorado.
+- Status: Online, Offline ou Aguardando.
+- Latencia: tempo de resposta do ping, quando disponivel.
+- Ultima leitura: horario da ultima verificacao.
+- Mensagem: erro retornado pelo ping quando o equipamento esta offline.
+
+
+4. Salvamento automatico
+------------------------
+
+Os equipamentos adicionados sao salvos automaticamente no arquivo:
+
+equipamentos.txt
+
+Esse arquivo e criado pelo proprio programa caso ainda nao exista.
+
+Cada linha do arquivo segue o formato:
+
+Nome do equipamento;IP
+
+Exemplo:
+
+Servidor Principal;192.168.0.10
+
+Ao abrir o programa novamente, os equipamentos salvos nesse arquivo sao
+carregados automaticamente.
+
+Quando um equipamento e removido pela interface, ele tambem e removido do
+arquivo equipamentos.txt.
+
+
+5. Como remover equipamentos
+----------------------------
+
+Clique em um equipamento na tabela e depois clique em "Remover selecionado".
+
+O monitoramento desse equipamento sera interrompido e o registro tambem sera
+removido do arquivo equipamentos.txt.
+
+
+6. Notificacoes pelo WhatsApp
+-----------------------------
+
+As notificacoes sao configuradas na aba Configuracoes do programa.
+
+Nessa aba devem ser preenchidos:
+
+- URL do endpoint da Evolution API.
+- Numero do grupo ou telefone que recebera a notificacao.
+- Chave da API.
+
+Depois de preencher os campos, clique em Salvar configuracoes.
+
+Onde encontrar:
+
+- URL do endpoint: fica na documentacao da Evolution API para envio de mensagem
+  de texto. O formato costuma ser:
+  https://SEU_SERVIDOR/message/sendText/NOME_DA_INSTANCIA
+- Chave da API: e a chave/apikey da instancia no painel da Evolution API.
+- Telefone: use DDI + DDD + numero.
+- Grupo: use o identificador terminado em @g.us.
+
+Uma forma mais facil de descobrir o identificador do grupo e consultar a
+Evolution API:
+
+GET https://SEU_SERVIDOR/group/fetchAllGroups/NOME_DA_INSTANCIA?getParticipants=false
+Header: apikey: SUA_CHAVE
+
+A resposta lista os grupos. Copie o campo id do grupo desejado.
+
+O programa envia notificacoes quando um equipamento fica offline por:
+
+- 1 minuto
+- 15 minutos
+- 30 minutos
+- 60 minutos
+
+Quando a conexao do equipamento e reestabelecida, o programa tambem envia uma
+mensagem informando a recuperacao.
+
+Para evitar mensagens desnecessarias, a notificacao de recuperacao so e enviada
+quando a queda ja tinha gerado pelo menos um alerta de desconexao.
+
+
+7. Log de quedas
+----------------
+
+O programa cria automaticamente o arquivo:
+
+quedas_log.txt
+
+Esse arquivo registra cada queda detectada, mesmo quando ela dura menos de 1
+minuto e nao gera notificacao no WhatsApp.
+
+Quando um equipamento para de responder, o log registra o inicio da queda.
+Quando ele volta a responder, o log registra o fim da queda e a duracao total.
+
+
+8. Armazenamento das configuracoes sensiveis
+--------------------------------------------
+
+As informacoes sensiveis da Evolution API nao ficam salvas no codigo.
+
+Quando as configuracoes sao salvas pela aba Configuracoes, o programa cria o
+arquivo:
+
+configuracoes_sensiveis.dat
+
+Esse arquivo e criptografado usando a protecao do proprio Windows, chamada
+DPAPI. Na pratica, ele so pode ser lido pelo mesmo usuario do Windows que salvou
+as configuracoes.
+
+O arquivo configuracoes_sensiveis.dat fica no .gitignore e nao deve ser enviado
+ao GitHub.
+
+Se o programa for usado em outra maquina, ou com outro usuario do Windows, sera
+necessario preencher as configuracoes novamente pela aba Configuracoes.
+
+
+9. Arquivos principais
+----------------------
+
+main.py
+Inicia a aplicacao.
+
+monitor_app.py
+Contem a interface grafica e controla a tabela de equipamentos.
+
+ping_monitor.py
+Executa os pings em segundo plano.
+
+equipment_store.py
+Salva e carrega os equipamentos no arquivo equipamentos.txt.
+
+notification_config.py
+Guarda apenas configuracoes nao sensiveis, como os tempos de notificacao.
+
+secure_settings.py
+Salva e carrega as configuracoes sensiveis com criptografia local.
+
+notification_client.py
+Envia mensagens para a Evolution API.
+
+outage_notifier.py
+Controla o tempo de queda e dispara notificacoes.
+
+outage_logger.py
+Registra inicio, fim e duracao das quedas no arquivo quedas_log.txt.
+
+10. Observacoes importantes
+--------------------------
+
+- O computador que executa o programa precisa ter acesso a rede dos
+  equipamentos monitorados.
+- Para testar uma queda real, monitore o IP de outro equipamento. Pingar o
+  proprio computador pode nao representar corretamente a conexao fisica.
+- O envio de notificacoes depende do acesso ao endereco da Evolution API.
+- A URL da API, a chave e o grupo do WhatsApp devem ser configurados pela aba
+  Configuracoes.
+- O arquivo configuracoes_sensiveis.dat esta no .gitignore e nao deve ser
+  enviado ao GitHub.
