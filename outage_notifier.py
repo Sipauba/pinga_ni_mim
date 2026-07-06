@@ -7,8 +7,9 @@ from datetime import datetime
 
 from notification_client import EvolutionApiClient, NotificationResponse
 from notification_config import (
-    DEFAULT_NOTIFICATION_THRESHOLDS_MINUTES,
-    normalize_thresholds_minutes,
+    DEFAULT_NOTIFICATION_THRESHOLDS_SECONDS,
+    minutes_to_seconds,
+    normalize_thresholds_seconds,
 )
 from outage_logger import OutageLogger
 from ping_monitor import PingResult
@@ -31,6 +32,7 @@ class OutageNotifier:
         client: EvolutionApiClient | None = None,
         logger: OutageLogger | None = None,
         settings: NotificationSettings | None = None,
+        thresholds_seconds: tuple[int, ...] | None = None,
         thresholds_minutes: tuple[int, ...] | None = None,
     ) -> None:
         self.settings = settings or NotificationSettings()
@@ -38,9 +40,14 @@ class OutageNotifier:
         self.logger = logger or OutageLogger()
         self.client.update_credentials(self.settings.api_url, self.settings.api_key)
         self.group_number = self.settings.whatsapp_number
-        thresholds = thresholds_minutes or self.settings.thresholds_minutes
-        self.thresholds_minutes = normalize_thresholds_minutes(
-            thresholds or DEFAULT_NOTIFICATION_THRESHOLDS_MINUTES
+        if thresholds_seconds is not None:
+            thresholds = thresholds_seconds
+        elif thresholds_minutes is not None:
+            thresholds = minutes_to_seconds(thresholds_minutes)
+        else:
+            thresholds = self.settings.thresholds_seconds
+        self.thresholds_seconds = normalize_thresholds_seconds(
+            thresholds or DEFAULT_NOTIFICATION_THRESHOLDS_SECONDS
         )
         self._outages_by_ip: dict[str, OutageState] = {}
 
@@ -50,12 +57,12 @@ class OutageNotifier:
         self.settings = settings
         self.client.update_credentials(settings.api_url, settings.api_key)
         self.group_number = settings.whatsapp_number
-        self.update_thresholds(settings.thresholds_minutes)
+        self.update_thresholds(settings.thresholds_seconds)
 
-    def update_thresholds(self, thresholds_minutes: tuple[int, ...]) -> None:
+    def update_thresholds(self, thresholds_seconds: tuple[int, ...]) -> None:
         """Atualiza os intervalos usados nos proximos alertas."""
 
-        self.thresholds_minutes = normalize_thresholds_minutes(thresholds_minutes)
+        self.thresholds_seconds = normalize_thresholds_seconds(thresholds_seconds)
 
     def handle_ping_result(self, result: PingResult) -> None:
         """Atualiza o estado de queda e envia alertas quando necessario."""
@@ -66,13 +73,13 @@ class OutageNotifier:
 
         outage = self._outages_by_ip.get(result.ip_address)
         if outage is None:
-            outage = OutageState(started_at=result.checked_at)
+            outage = OutageState(started_at=result.outage_started_at or result.checked_at)
             self._outages_by_ip[result.ip_address] = outage
             self.logger.log_outage_started(result)
 
-        elapsed_minutes = (result.checked_at - outage.started_at).total_seconds() / 60
-        for threshold in self.thresholds_minutes:
-            if elapsed_minutes >= threshold and threshold not in outage.notified_thresholds:
+        elapsed_seconds = (result.checked_at - outage.started_at).total_seconds()
+        for threshold in self.thresholds_seconds:
+            if elapsed_seconds >= threshold and threshold not in outage.notified_thresholds:
                 outage.notified_thresholds.add(threshold)
                 self._send_outage_notification(result, outage.started_at, threshold)
 
@@ -89,6 +96,7 @@ class OutageNotifier:
             return
 
         self.logger.log_outage_finished(result, outage.started_at)
+        self._send_reached_thresholds(result, outage)
 
         # Evita aviso de recuperacao para quedas muito curtas que nao chegaram
         # ao primeiro limiar de notificacao.
@@ -97,15 +105,24 @@ class OutageNotifier:
 
         self._send_recovery_notification(result, outage.started_at)
 
+    def _send_reached_thresholds(self, result: PingResult, outage: OutageState) -> None:
+        """Envia alertas que foram alcancados antes da recuperacao."""
+
+        elapsed_seconds = (result.checked_at - outage.started_at).total_seconds()
+        for threshold in self.thresholds_seconds:
+            if elapsed_seconds >= threshold and threshold not in outage.notified_thresholds:
+                outage.notified_thresholds.add(threshold)
+                self._send_outage_notification(result, outage.started_at, threshold)
+
     def _send_outage_notification(
         self,
         result: PingResult,
         outage_started_at: datetime,
-        threshold_minutes: int,
+        threshold_seconds: int,
     ) -> None:
         """Monta e envia a mensagem de alerta para o grupo do WhatsApp."""
 
-        text = self._build_message(result, outage_started_at, threshold_minutes)
+        text = self._build_message(result, outage_started_at, threshold_seconds)
         self.client.send_text_async(
             number=self.group_number,
             text=text,
@@ -130,11 +147,11 @@ class OutageNotifier:
     def _build_message(
         result: PingResult,
         outage_started_at: datetime,
-        threshold_minutes: int,
+        threshold_seconds: int,
     ) -> str:
         """Cria o texto enviado para o grupo."""
 
-        duration = _format_duration(threshold_minutes)
+        duration = _format_duration(threshold_seconds)
         started_at = outage_started_at.strftime("%d/%m/%Y %H:%M:%S")
         checked_at = result.checked_at.strftime("%d/%m/%Y %H:%M:%S")
         error = result.error or "Sem resposta ao ping"
@@ -185,14 +202,11 @@ class OutageNotifier:
         )
 
 
-def _format_duration(minutes: int) -> str:
-    """Formata minutos em texto simples para a mensagem de alerta."""
+def _format_duration(total_seconds: int) -> str:
+    """Formata segundos em texto simples para a mensagem de alerta."""
 
-    if minutes < 60:
-        return f"{minutes} minuto" if minutes == 1 else f"{minutes} minutos"
-
-    hours = minutes // 60
-    return f"{hours} hora" if hours == 1 else f"{hours} horas"
+    seconds = int(total_seconds)
+    return _format_elapsed_duration(seconds)
 
 
 def _format_elapsed_duration(total_seconds: int) -> str:

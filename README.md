@@ -110,15 +110,20 @@ Preencha:
 - URL do endpoint da Evolution API.
 - Numero ou grupo que recebera as mensagens.
 - Chave da API.
-- Intervalos, em minutos, que devem gerar alerta quando a queda continuar.
+- Intervalos que devem gerar alerta quando a queda continuar.
 - Quantidade de falhas seguidas para confirmar offline.
 - Quantidade de mudancas online/offline e janela em minutos para marcar oscilacao.
 
 O campo de intervalos aceita valores separados por virgula, ponto e virgula ou
-espaco. Exemplo:
+espaco. Use `s` para segundos, `m` para minutos e `h` para horas. Valores sem
+unidade continuam sendo tratados como minutos. Exemplos:
 
 ```text
-1, 5, 15, 30
+5s, 30s, 1m, 5m
+```
+
+```text
+1, 5, 15
 ```
 
 O motor de monitoramento usa por padrao 3 falhas seguidas para confirmar

@@ -28,6 +28,7 @@ class PingResult:
     latency_ms: float | None
     checked_at: datetime
     error: str | None = None
+    outage_started_at: datetime | None = None
 
 
 class EquipmentMonitor:

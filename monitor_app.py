@@ -112,7 +112,7 @@ class NetworkMonitorApp(tk.Tk):
         self.whatsapp_number_var = tk.StringVar(value=self._notification_settings.whatsapp_number)
         self.api_key_var = tk.StringVar(value=self._notification_settings.api_key)
         self.notification_intervals_var = tk.StringVar(
-            value=format_thresholds_text(self._notification_settings.thresholds_minutes)
+            value=format_thresholds_text(self._notification_settings.thresholds_seconds)
         )
         self.offline_failure_threshold_var = tk.StringVar(
             value=str(self._notification_settings.offline_failure_threshold)
@@ -497,7 +497,7 @@ class NetworkMonitorApp(tk.Tk):
         self.api_key_entry = ttk.Entry(form, textvariable=self.api_key_var, show="*")
         self.api_key_entry.grid(row=2, column=1, sticky="ew", pady=(0, 10))
 
-        ttk.Label(form, text="Alertar apos (min)").grid(
+        ttk.Label(form, text="Alertar apos").grid(
             row=3, column=0, sticky="w", padx=(0, 8)
         )
         ttk.Entry(form, textvariable=self.notification_intervals_var).grid(
@@ -567,8 +567,9 @@ class NetworkMonitorApp(tk.Tk):
             "URL do endpoint: use o endpoint de envio de texto da Evolution API. "
             "O formato costuma ser https://SEU_SERVIDOR/message/sendText/NOME_DA_INSTANCIA.\n\n"
             "Chave da API: use a apikey/chave da instancia no painel da Evolution API.\n\n"
-            "Alertar apos: informe os minutos de queda que devem gerar notificacao, "
-            "separados por virgula. Exemplo: 1, 5, 15, 30.\n\n"
+            "Alertar apos: informe os tempos de queda que devem gerar notificacao. "
+            "Use s para segundos, m para minutos ou h para horas. "
+            "Exemplo: 5s, 30s, 1m, 5m.\n\n"
             "Falhas p/ offline: quantidade de pings seguidos sem resposta antes de "
             "confirmar queda. Oscilacao: quantidade de mudancas online/offline dentro "
             "da janela em minutos.\n\n"
@@ -612,7 +613,7 @@ class NetworkMonitorApp(tk.Tk):
         """Valida, criptografa e salva as configuracoes de notificacao."""
 
         try:
-            thresholds_minutes = parse_thresholds_text(self.notification_intervals_var.get())
+            thresholds_seconds = parse_thresholds_text(self.notification_intervals_var.get())
             offline_failure_threshold = self._parse_positive_int(
                 self.offline_failure_threshold_var.get(),
                 "Falhas p/ offline",
@@ -633,7 +634,7 @@ class NetworkMonitorApp(tk.Tk):
             api_url=self.api_url_var.get().strip(),
             api_key=self.api_key_var.get().strip(),
             whatsapp_number=self.whatsapp_number_var.get().strip(),
-            thresholds_minutes=thresholds_minutes,
+            thresholds_seconds=thresholds_seconds,
             offline_failure_threshold=offline_failure_threshold,
             flapping_transition_count=flapping_transition_count,
             flapping_window_minutes=flapping_window_minutes,
@@ -662,7 +663,7 @@ class NetworkMonitorApp(tk.Tk):
         self._notification_settings = settings
         self._settings_load_error = None
         self._outage_notifier.update_settings(settings)
-        self.notification_intervals_var.set(format_thresholds_text(thresholds_minutes))
+        self.notification_intervals_var.set(format_thresholds_text(thresholds_seconds))
         self.offline_failure_threshold_var.set(str(offline_failure_threshold))
         self.flapping_transition_count_var.set(str(flapping_transition_count))
         self.flapping_window_minutes_var.set(str(flapping_window_minutes))
@@ -899,7 +900,17 @@ class NetworkMonitorApp(tk.Tk):
                 if maintenance_active:
                     self._outage_notifier.clear(result.ip_address)
                 else:
-                    self._outage_notifier.handle_ping_result(result)
+                    notification_result = PingResult(
+                        name=result.name,
+                        ip_address=result.ip_address,
+                        group=result.group,
+                        is_online=result.is_online,
+                        latency_ms=result.latency_ms,
+                        checked_at=result.checked_at,
+                        error=result.error,
+                        outage_started_at=state.offline_since,
+                    )
+                    self._outage_notifier.handle_ping_result(notification_result)
 
         if state.confirmed_status is not None:
             self._last_status[result.ip_address] = state.confirmed_status

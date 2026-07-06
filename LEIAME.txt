@@ -110,7 +110,7 @@ Nessa aba devem ser preenchidos:
 - URL do endpoint da Evolution API.
 - Numero do grupo ou telefone que recebera a notificacao.
 - Chave da API.
-- Intervalos, em minutos, que devem gerar alertas enquanto a queda continuar.
+- Intervalos que devem gerar alertas enquanto a queda continuar.
 - Falhas seguidas necessarias para confirmar offline.
 - Quantidade de mudancas e janela em minutos para marcar oscilacao.
 
@@ -134,8 +134,11 @@ Header: apikey: SUA_CHAVE
 A resposta lista os grupos. Copie o campo id do grupo desejado.
 
 O programa envia notificacoes quando um equipamento fica offline pelos tempos
-informados no campo Alertar apos (min). Separe os valores por virgula, ponto e
-virgula ou espaco. Exemplo:
+informados no campo Alertar apos. Separe os valores por virgula, ponto e
+virgula ou espaco. Use s para segundos, m para minutos e h para horas. Valores
+sem unidade continuam sendo tratados como minutos. Exemplos:
+
+5s, 30s, 1m, 5m
 
 1, 5, 15, 30
 

@@ -23,7 +23,8 @@ class OutageLogger:
 
         try:
             self._ensure_header()
-            checked_at = result.checked_at.strftime("%Y-%m-%d %H:%M:%S")
+            started_at = result.outage_started_at or result.checked_at
+            checked_at = started_at.strftime("%Y-%m-%d %H:%M:%S")
             error = result.error or "Sem resposta ao ping"
 
             self._append_line(
