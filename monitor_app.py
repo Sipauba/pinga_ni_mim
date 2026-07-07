@@ -82,6 +82,7 @@ class NetworkMonitorApp(tk.Tk):
         self._last_status: dict[str, bool] = {}
         self._runtime_by_ip: dict[str, EquipmentRuntimeState] = {}
         self._event_history: list[tuple[datetime, str, str, str]] = []
+        self._editing_ip: str | None = None
         self._store = EquipmentStore()
         self._settings_store = SecureSettingsStore()
         self._settings_load_error: str | None = None
@@ -113,6 +114,11 @@ class NetworkMonitorApp(tk.Tk):
         self.api_key_var = tk.StringVar(value=self._notification_settings.api_key)
         self.notification_intervals_var = tk.StringVar(
             value=format_thresholds_text(self._notification_settings.thresholds_seconds)
+        )
+        self.group_alert_group_var = tk.StringVar()
+        self.group_alert_intervals_var = tk.StringVar()
+        self.group_alert_status_var = tk.StringVar(
+            value="Grupos sem regra propria usam o intervalo global."
         )
         self.offline_failure_threshold_var = tk.StringVar(
             value=str(self._notification_settings.offline_failure_threshold)
@@ -192,11 +198,12 @@ class NetworkMonitorApp(tk.Tk):
 
         self._build_dashboard_cards(parent)
 
-        form = ttk.LabelFrame(parent, text="Novo equipamento", padding=12)
-        form.grid(row=2, column=0, sticky="ew", pady=(0, 10))
-        form.columnconfigure(1, weight=1)
-        form.columnconfigure(3, weight=1)
+        self.equipment_form = ttk.LabelFrame(parent, text="Novo equipamento", padding=12)
+        self.equipment_form.grid(row=2, column=0, sticky="ew", pady=(0, 10))
+        self.equipment_form.columnconfigure(1, weight=1)
+        self.equipment_form.columnconfigure(3, weight=1)
 
+        form = self.equipment_form
         ttk.Label(form, text="Nome").grid(row=0, column=0, sticky="w", padx=(0, 8))
         name_entry = ttk.Entry(form, textvariable=self.name_var)
         name_entry.grid(row=0, column=1, sticky="ew", padx=(0, 12))
@@ -204,20 +211,34 @@ class NetworkMonitorApp(tk.Tk):
         ttk.Label(form, text="IP").grid(row=0, column=2, sticky="w", padx=(0, 8))
         ip_entry = ttk.Entry(form, textvariable=self.ip_var)
         ip_entry.grid(row=0, column=3, sticky="ew", padx=(0, 12))
-        ip_entry.bind("<Return>", lambda _event: self._add_equipment())
+        ip_entry.bind("<Return>", lambda _event: self._save_equipment_form())
 
         ttk.Label(form, text="Grupo").grid(row=1, column=0, sticky="w", padx=(0, 8))
         self.group_entry = ttk.Combobox(form, textvariable=self.group_var)
         self.group_entry.grid(row=1, column=1, sticky="ew", padx=(0, 12), pady=(10, 0))
-        self.group_entry.bind("<Return>", lambda _event: self._add_equipment())
+        self.group_entry.bind("<Return>", lambda _event: self._save_equipment_form())
 
         ttk.Label(form, text="Ping (s)").grid(row=1, column=2, sticky="w", padx=(0, 8))
         ping_entry = ttk.Entry(form, textvariable=self.ping_interval_var, width=10)
         ping_entry.grid(row=1, column=3, sticky="w", pady=(10, 0))
-        ping_entry.bind("<Return>", lambda _event: self._add_equipment())
+        ping_entry.bind("<Return>", lambda _event: self._save_equipment_form())
 
-        ttk.Button(form, text="Adicionar", command=self._add_equipment).grid(
-            row=0, column=4, rowspan=2, sticky="nsew"
+        self.save_equipment_button = ttk.Button(
+            form,
+            text="Adicionar",
+            command=self._save_equipment_form,
+        )
+        self.save_equipment_button.grid(
+            row=0, column=4, sticky="nsew", padx=(0, 8)
+        )
+        self.cancel_edit_button = ttk.Button(
+            form,
+            text="Cancelar",
+            command=self._cancel_equipment_edit,
+            state="disabled",
+        )
+        self.cancel_edit_button.grid(
+            row=1, column=4, sticky="nsew", padx=(0, 8), pady=(10, 0)
         )
 
         filters = ttk.LabelFrame(parent, text="Filtros", padding=10)
@@ -462,6 +483,12 @@ class NetworkMonitorApp(tk.Tk):
             sticky="w",
             padx=(0, 8),
         )
+        ttk.Button(actions, text="Editar selecionado", command=self._edit_selected).grid(
+            row=0,
+            column=4,
+            sticky="w",
+            padx=(0, 8),
+        )
         ttk.Button(actions, text="Remover selecionado", command=self._remove_selected).grid(
             row=0,
             column=6,
@@ -559,8 +586,10 @@ class NetworkMonitorApp(tk.Tk):
             command=self._save_notification_settings,
         ).grid(row=0, column=1, sticky="e")
 
+        self._build_group_alert_settings(parent)
+
         help_frame = ttk.LabelFrame(parent, text="Onde encontrar essas informacoes", padding=12)
-        help_frame.grid(row=1, column=0, sticky="ew", pady=(12, 0))
+        help_frame.grid(row=2, column=0, sticky="ew", pady=(12, 0))
         help_frame.columnconfigure(0, weight=1)
 
         help_text = (
@@ -570,6 +599,8 @@ class NetworkMonitorApp(tk.Tk):
             "Alertar apos: informe os tempos de queda que devem gerar notificacao. "
             "Use s para segundos, m para minutos ou h para horas. "
             "Exemplo: 5s, 30s, 1m, 5m.\n\n"
+            "Alertas por grupo: cadastre intervalos diferentes para grupos especificos. "
+            "Quando nao houver regra para o grupo, vale o intervalo global acima.\n\n"
             "Falhas p/ offline: quantidade de pings seguidos sem resposta antes de "
             "confirmar queda. Oscilacao: quantidade de mudancas online/offline dentro "
             "da janela em minutos.\n\n"
@@ -583,6 +614,70 @@ class NetworkMonitorApp(tk.Tk):
             column=0,
             sticky="ew",
         )
+
+    def _build_group_alert_settings(self, parent: ttk.Frame) -> None:
+        """Cria a configuracao de intervalos de alerta por grupo."""
+
+        frame = ttk.LabelFrame(parent, text="Alertas por grupo", padding=12)
+        frame.grid(row=1, column=0, sticky="ew", pady=(12, 0))
+        frame.columnconfigure(1, weight=1)
+        frame.columnconfigure(3, weight=1)
+
+        ttk.Label(frame, text="Grupo").grid(row=0, column=0, sticky="w", padx=(0, 8))
+        self.group_alert_combo = ttk.Combobox(
+            frame,
+            textvariable=self.group_alert_group_var,
+            state="readonly",
+        )
+        self.group_alert_combo.grid(row=0, column=1, sticky="ew", padx=(0, 12))
+        self.group_alert_combo.bind(
+            "<<ComboboxSelected>>",
+            lambda _event: self._load_group_alert_selection(),
+        )
+
+        ttk.Label(frame, text="Alertar apos").grid(row=0, column=2, sticky="w", padx=(0, 8))
+        ttk.Entry(frame, textvariable=self.group_alert_intervals_var).grid(
+            row=0,
+            column=3,
+            sticky="ew",
+            padx=(0, 12),
+        )
+
+        ttk.Button(frame, text="Salvar grupo", command=self._save_group_alert_settings).grid(
+            row=0,
+            column=4,
+            sticky="ew",
+            padx=(0, 8),
+        )
+        ttk.Button(frame, text="Usar global", command=self._remove_group_alert_settings).grid(
+            row=0,
+            column=5,
+            sticky="ew",
+        )
+
+        ttk.Label(frame, textvariable=self.group_alert_status_var, style="Summary.TLabel").grid(
+            row=1,
+            column=0,
+            columnspan=6,
+            sticky="w",
+            pady=(8, 8),
+        )
+
+        columns = ("group", "intervals")
+        self.group_alert_tree = ttk.Treeview(
+            frame,
+            columns=columns,
+            show="headings",
+            height=4,
+            selectmode="browse",
+        )
+        self.group_alert_tree.heading("group", text="Grupo")
+        self.group_alert_tree.heading("intervals", text="Intervalos")
+        self.group_alert_tree.column("group", width=180, minwidth=120)
+        self.group_alert_tree.column("intervals", width=360, minwidth=180)
+        self.group_alert_tree.grid(row=2, column=0, columnspan=6, sticky="ew")
+        self.group_alert_tree.bind("<<TreeviewSelect>>", self._select_group_alert_rule)
+        self._refresh_group_alert_options()
 
     def _load_notification_settings(self) -> NotificationSettings:
         """Carrega as configuracoes criptografadas sem interromper a abertura."""
@@ -635,6 +730,7 @@ class NetworkMonitorApp(tk.Tk):
             api_key=self.api_key_var.get().strip(),
             whatsapp_number=self.whatsapp_number_var.get().strip(),
             thresholds_seconds=thresholds_seconds,
+            group_thresholds_seconds=self._notification_settings.group_thresholds_seconds,
             offline_failure_threshold=offline_failure_threshold,
             flapping_transition_count=flapping_transition_count,
             flapping_window_minutes=flapping_window_minutes,
@@ -667,12 +763,154 @@ class NetworkMonitorApp(tk.Tk):
         self.offline_failure_threshold_var.set(str(offline_failure_threshold))
         self.flapping_transition_count_var.set(str(flapping_transition_count))
         self.flapping_window_minutes_var.set(str(flapping_window_minutes))
+        self._refresh_group_alert_options()
         self._refresh_live_rows()
         self.settings_status_var.set("Configuracoes salvas com criptografia local.")
         messagebox.showinfo("Configuracoes salvas", "As notificacoes foram configuradas.")
 
-    def _add_equipment(self) -> None:
-        """Valida os campos e inicia o monitoramento do equipamento."""
+    def _save_group_alert_settings(self) -> None:
+        """Salva intervalos de notificacao especificos para um grupo."""
+
+        group = self._normalize_group(self.group_alert_group_var.get())
+        try:
+            thresholds = parse_thresholds_text(self.group_alert_intervals_var.get())
+        except ValueError as exc:
+            messagebox.showwarning("Intervalos invalidos", str(exc))
+            return
+
+        group_thresholds = dict(self._notification_settings.group_thresholds_seconds)
+        group_thresholds[group] = thresholds
+        settings = self._copy_notification_settings(group_thresholds_seconds=group_thresholds)
+        if not self._persist_notification_settings(settings):
+            return
+
+        self.group_alert_intervals_var.set(format_thresholds_text(thresholds))
+        self.group_alert_status_var.set(f"Intervalos salvos para o grupo {group}.")
+        self._refresh_group_alert_options()
+
+    def _remove_group_alert_settings(self) -> None:
+        """Remove a regra especifica do grupo, voltando ao padrao global."""
+
+        group = self._normalize_group(self.group_alert_group_var.get())
+        group_thresholds = dict(self._notification_settings.group_thresholds_seconds)
+        if group not in group_thresholds:
+            self.group_alert_status_var.set(f"O grupo {group} ja usa o intervalo global.")
+            self._load_group_alert_selection()
+            return
+
+        group_thresholds.pop(group, None)
+        settings = self._copy_notification_settings(group_thresholds_seconds=group_thresholds)
+        if not self._persist_notification_settings(settings):
+            return
+
+        self.group_alert_status_var.set(f"O grupo {group} voltou a usar o intervalo global.")
+        self._refresh_group_alert_options()
+        self._load_group_alert_selection()
+
+    def _copy_notification_settings(
+        self,
+        group_thresholds_seconds: dict[str, tuple[int, ...]] | None = None,
+    ) -> NotificationSettings:
+        """Cria uma copia das configuracoes atuais com grupos atualizados."""
+
+        return NotificationSettings(
+            api_url=self._notification_settings.api_url,
+            api_key=self._notification_settings.api_key,
+            whatsapp_number=self._notification_settings.whatsapp_number,
+            thresholds_seconds=self._notification_settings.thresholds_seconds,
+            group_thresholds_seconds=(
+                group_thresholds_seconds
+                if group_thresholds_seconds is not None
+                else self._notification_settings.group_thresholds_seconds
+            ),
+            offline_failure_threshold=self._notification_settings.offline_failure_threshold,
+            flapping_transition_count=self._notification_settings.flapping_transition_count,
+            flapping_window_minutes=self._notification_settings.flapping_window_minutes,
+        )
+
+    def _persist_notification_settings(self, settings: NotificationSettings) -> bool:
+        """Salva configuracoes e atualiza os componentes em memoria."""
+
+        try:
+            self._settings_store.save(settings)
+        except SettingsStorageError as exc:
+            messagebox.showerror("Erro ao salvar", str(exc))
+            return False
+
+        self._notification_settings = settings
+        self._settings_load_error = None
+        self._outage_notifier.update_settings(settings)
+        return True
+
+    def _load_group_alert_selection(self) -> None:
+        """Carrega os intervalos exibidos para o grupo selecionado."""
+
+        group = self._normalize_group(self.group_alert_group_var.get())
+        thresholds = self._notification_settings.group_thresholds_seconds.get(
+            group,
+            self._notification_settings.thresholds_seconds,
+        )
+        self.group_alert_intervals_var.set(format_thresholds_text(thresholds))
+
+    def _select_group_alert_rule(self, _event: tk.Event) -> None:
+        """Seleciona uma regra de grupo a partir da tabela."""
+
+        selection = self.group_alert_tree.selection()
+        if not selection:
+            return
+
+        values = self.group_alert_tree.item(selection[0], "values")
+        if not values:
+            return
+
+        self.group_alert_group_var.set(str(values[0]))
+        self._load_group_alert_selection()
+
+    def _refresh_group_alert_options(self) -> None:
+        """Atualiza grupos disponiveis na configuracao de alertas por grupo."""
+
+        if not hasattr(self, "group_alert_combo"):
+            return
+
+        groups = {
+            self._normalize_group(group)
+            for group in self._group_by_ip.values()
+            if self._normalize_group(group)
+        }
+        groups.update(self._notification_settings.group_thresholds_seconds)
+        groups.add(self._normalize_group(self.group_var.get()))
+        groups.add(DEFAULT_EQUIPMENT_GROUP)
+
+        ordered_groups = [DEFAULT_EQUIPMENT_GROUP]
+        ordered_groups.extend(
+            group for group in sorted(groups) if group != DEFAULT_EQUIPMENT_GROUP
+        )
+        self.group_alert_combo.configure(values=tuple(ordered_groups))
+
+        if self.group_alert_group_var.get() not in ordered_groups:
+            self.group_alert_group_var.set(ordered_groups[0])
+
+        self._refresh_group_alert_tree()
+        self._load_group_alert_selection()
+
+    def _refresh_group_alert_tree(self) -> None:
+        """Renderiza as regras de alerta por grupo."""
+
+        if not hasattr(self, "group_alert_tree"):
+            return
+
+        for item_id in self.group_alert_tree.get_children():
+            self.group_alert_tree.delete(item_id)
+
+        for group, thresholds in sorted(self._notification_settings.group_thresholds_seconds.items()):
+            self.group_alert_tree.insert(
+                "",
+                "end",
+                values=(group, format_thresholds_text(thresholds)),
+            )
+
+    def _save_equipment_form(self) -> None:
+        """Valida o formulario e adiciona ou edita o equipamento."""
 
         name = self.name_var.get().strip()
         ip_address = self.ip_var.get().strip()
@@ -691,18 +929,59 @@ class NetworkMonitorApp(tk.Tk):
             messagebox.showwarning("IP invalido", "Informe um endereco IPv4 ou IPv6 valido.")
             return
 
-        if ip_address in self._monitors:
+        editing_ip = self._editing_ip
+        if ip_address in self._monitors and ip_address != editing_ip:
             messagebox.showwarning("IP duplicado", "Esse IP ja esta sendo monitorado.")
             return
+
+        if editing_ip is not None:
+            self._remove_equipment_by_ip(editing_ip, save=False)
 
         self._start_monitoring(name, ip_address, group, ping_interval_seconds)
         self._save_equipment_list()
 
+        if editing_ip is not None:
+            self._record_event(ip_address, "Cadastro editado", datetime.now())
+            self._cancel_equipment_edit()
+        else:
+            self.name_var.set("")
+            self.ip_var.set("")
+            self.group_var.set(group)
+            self.ping_interval_var.set(self._format_seconds(ping_interval_seconds))
+
+        self._update_summary()
+
+    def _edit_selected(self) -> None:
+        """Carrega o equipamento selecionado no formulario para edicao."""
+
+        ip_address = self._get_selected_ip()
+        if ip_address is None:
+            return
+
+        monitor = self._monitors.get(ip_address)
+        if monitor is None:
+            return
+
+        self._editing_ip = ip_address
+        self.name_var.set(monitor.name)
+        self.ip_var.set(monitor.ip_address)
+        self.group_var.set(monitor.group)
+        self.ping_interval_var.set(self._format_seconds(monitor.interval_seconds))
+        self.equipment_form.configure(text="Editar equipamento")
+        self.save_equipment_button.configure(text="Salvar edicao")
+        self.cancel_edit_button.configure(state="normal")
+
+    def _cancel_equipment_edit(self) -> None:
+        """Sai do modo de edicao e limpa o formulario."""
+
+        self._editing_ip = None
         self.name_var.set("")
         self.ip_var.set("")
-        self.group_var.set(group)
-        self.ping_interval_var.set(self._format_seconds(ping_interval_seconds))
-        self._update_summary()
+        self.group_var.set(DEFAULT_EQUIPMENT_GROUP)
+        self.ping_interval_var.set(self._format_seconds(DEFAULT_PING_INTERVAL_SECONDS))
+        self.equipment_form.configure(text="Novo equipamento")
+        self.save_equipment_button.configure(text="Adicionar")
+        self.cancel_edit_button.configure(state="disabled")
 
     def _remove_selected(self) -> None:
         """Para o monitoramento e remove a linha selecionada."""
@@ -712,25 +991,43 @@ class NetworkMonitorApp(tk.Tk):
             messagebox.showinfo("Remover equipamento", "Selecione um equipamento na tabela.")
             return
 
-        item_id = selection[0]
-        ip_address = self._ip_by_item.pop(item_id)
+        ip_address = self._ip_by_item.get(selection[0])
+        if ip_address is None:
+            return
 
-        monitor = self._monitors.pop(ip_address)
-        monitor.stop(wait=False)
+        if self._editing_ip == ip_address:
+            self._cancel_equipment_edit()
 
-        self._items_by_ip.pop(ip_address, None)
-        self._last_status.pop(ip_address, None)
-        self._runtime_by_ip.pop(ip_address, None)
-        self._group_by_ip.pop(ip_address, None)
-        self._visible_ips.discard(ip_address)
-        self._outage_notifier.clear(ip_address)
-        self.tree.delete(item_id)
+        self._remove_equipment_by_ip(ip_address, save=False)
         self._save_equipment_list()
         self._refresh_group_options()
         self._apply_filters()
         self._refresh_dashboard()
         self._refresh_group_summary()
         self._update_summary()
+
+    def _remove_equipment_by_ip(self, ip_address: str, save: bool = True) -> None:
+        """Remove um equipamento pelo IP, parando seu monitor."""
+
+        item_id = self._items_by_ip.pop(ip_address, None)
+        if item_id is not None:
+            self._ip_by_item.pop(item_id, None)
+
+        monitor = self._monitors.pop(ip_address, None)
+        if monitor is not None:
+            monitor.stop(wait=False)
+
+        self._last_status.pop(ip_address, None)
+        self._runtime_by_ip.pop(ip_address, None)
+        self._group_by_ip.pop(ip_address, None)
+        self._visible_ips.discard(ip_address)
+        self._outage_notifier.clear(ip_address)
+
+        if item_id is not None:
+            self.tree.delete(item_id)
+
+        if save:
+            self._save_equipment_list()
 
     def _load_saved_equipment(self) -> None:
         """Carrega do arquivo os equipamentos salvos anteriormente."""
@@ -1265,6 +1562,8 @@ class NetworkMonitorApp(tk.Tk):
 
         if self.group_filter_var.get() not in filter_values:
             self.group_filter_var.set(GROUP_FILTER_ALL)
+
+        self._refresh_group_alert_options()
 
     def _clear_filters(self) -> None:
         """Limpa filtros de grupo, status e busca."""

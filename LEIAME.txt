@@ -99,6 +99,11 @@ Clique em um equipamento na tabela e depois clique em "Remover selecionado".
 O monitoramento desse equipamento sera interrompido e o registro tambem sera
 removido do arquivo equipamentos.txt.
 
+Para editar um equipamento, selecione a linha na tabela e clique em
+"Editar selecionado". O formulario sera preenchido com os dados atuais. Altere
+nome, IP, grupo ou Ping (s) e clique em "Salvar edicao". Para sair sem mudar,
+clique em "Cancelar".
+
 
 6. Notificacoes pelo WhatsApp
 -----------------------------
@@ -111,6 +116,7 @@ Nessa aba devem ser preenchidos:
 - Numero do grupo ou telefone que recebera a notificacao.
 - Chave da API.
 - Intervalos que devem gerar alertas enquanto a queda continuar.
+- Intervalos especificos por grupo, quando algum grupo precisar de outro ritmo.
 - Falhas seguidas necessarias para confirmar offline.
 - Quantidade de mudancas e janela em minutos para marcar oscilacao.
 
@@ -146,6 +152,10 @@ Por padrao, o programa so confirma offline depois de 3 falhas seguidas. Tambem
 marca um equipamento como oscilando quando ha 4 mudancas de estado dentro de 10
 minutos.
 
+Na area Alertas por grupo, escolha o grupo, informe os intervalos e clique em
+Salvar grupo. Para voltar ao intervalo global, selecione o grupo e clique em
+Usar global.
+
 Na tela principal, a acao Silenciar alertas cria uma janela de manutencao para
 o equipamento selecionado. Durante esse periodo ele continua sendo monitorado,
 mas nao gera alertas pelo WhatsApp.
@@ -164,8 +174,8 @@ O programa cria automaticamente o arquivo:
 
 quedas_log.txt
 
-Esse arquivo registra cada queda detectada, mesmo quando ela dura menos de 1
-minuto e nao gera notificacao no WhatsApp.
+Esse arquivo registra cada queda detectada, mesmo quando ela dura menos que o
+primeiro intervalo configurado e nao gera notificacao no WhatsApp.
 
 Quando um equipamento para de responder, o log registra o inicio da queda.
 Quando ele volta a responder, o log registra o fim da queda e a duracao total.

@@ -35,6 +35,7 @@ pasta fixa e criar apenas um atalho para ele na area de trabalho.
 ## Funcionalidades atuais
 
 - Cadastro de multiplos equipamentos por nome, IP e grupo.
+- Edicao de equipamentos ja cadastrados pela propria tela.
 - Intervalo de ping configuravel por equipamento.
 - Dashboard com cards de total, online, offline, instavel, oscilando, aguardando e manutencao.
 - Resumo por grupo e filtros por grupo, status e busca por nome/IP/grupo.
@@ -44,6 +45,7 @@ pasta fixa e criar apenas um atalho para ele na area de trabalho.
 - Deteccao de equipamentos oscilando.
 - Janela de manutencao por equipamento para silenciar alertas temporariamente.
 - Notificacao via WhatsApp em intervalos de queda definidos pelo usuario.
+- Intervalos de notificacao especificos por grupo, com intervalo global como padrao.
 - Notificacao via WhatsApp quando a conexao e reestabelecida apos uma queda alertada.
 - Aba de configuracoes para informar endpoint, destinatario e chave da Evolution API.
 - Fila de envio de notificacoes para processar alertas simultaneos sem disputar a API.
@@ -81,6 +83,10 @@ grupo salvo e usa intervalo de ping de 1 segundo quando nao houver intervalo.
 Quando um equipamento e removido pela interface, ele tambem e removido desse
 arquivo.
 
+Para editar um equipamento, selecione a linha na tabela, clique em `Editar
+selecionado`, altere nome, IP, grupo ou intervalo de ping e clique em `Salvar
+edicao`. O monitoramento desse equipamento e reiniciado com os novos dados.
+
 ## Log de quedas
 
 O arquivo `quedas_log.txt` e criado automaticamente quando a primeira queda for
@@ -111,6 +117,7 @@ Preencha:
 - Numero ou grupo que recebera as mensagens.
 - Chave da API.
 - Intervalos que devem gerar alerta quando a queda continuar.
+- Intervalos especificos por grupo, quando algum grupo precisar de outro ritmo.
 - Quantidade de falhas seguidas para confirmar offline.
 - Quantidade de mudancas online/offline e janela em minutos para marcar oscilacao.
 
@@ -128,6 +135,10 @@ unidade continuam sendo tratados como minutos. Exemplos:
 
 O motor de monitoramento usa por padrao 3 falhas seguidas para confirmar
 offline e marca oscilacao quando ha 4 mudancas de estado dentro de 10 minutos.
+
+Na secao `Alertas por grupo`, escolha um grupo, informe os intervalos e clique
+em `Salvar grupo`. Para voltar a usar o intervalo global, selecione o grupo e
+clique em `Usar global`.
 
 Ao clicar em `Salvar configuracoes`, o programa cria o arquivo local:
 

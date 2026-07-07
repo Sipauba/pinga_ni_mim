@@ -49,6 +49,9 @@ class OutageNotifier:
         self.thresholds_seconds = normalize_thresholds_seconds(
             thresholds or DEFAULT_NOTIFICATION_THRESHOLDS_SECONDS
         )
+        self.group_thresholds_seconds = self._normalize_group_thresholds(
+            self.settings.group_thresholds_seconds
+        )
         self._outages_by_ip: dict[str, OutageState] = {}
 
     def update_settings(self, settings: NotificationSettings) -> None:
@@ -58,11 +61,17 @@ class OutageNotifier:
         self.client.update_credentials(settings.api_url, settings.api_key)
         self.group_number = settings.whatsapp_number
         self.update_thresholds(settings.thresholds_seconds)
+        self.update_group_thresholds(settings.group_thresholds_seconds)
 
     def update_thresholds(self, thresholds_seconds: tuple[int, ...]) -> None:
         """Atualiza os intervalos usados nos proximos alertas."""
 
         self.thresholds_seconds = normalize_thresholds_seconds(thresholds_seconds)
+
+    def update_group_thresholds(self, group_thresholds_seconds: dict[str, tuple[int, ...]]) -> None:
+        """Atualiza os intervalos especificos por grupo."""
+
+        self.group_thresholds_seconds = self._normalize_group_thresholds(group_thresholds_seconds)
 
     def handle_ping_result(self, result: PingResult) -> None:
         """Atualiza o estado de queda e envia alertas quando necessario."""
@@ -78,7 +87,7 @@ class OutageNotifier:
             self.logger.log_outage_started(result)
 
         elapsed_seconds = (result.checked_at - outage.started_at).total_seconds()
-        for threshold in self.thresholds_seconds:
+        for threshold in self._thresholds_for_group(result.group):
             if elapsed_seconds >= threshold and threshold not in outage.notified_thresholds:
                 outage.notified_thresholds.add(threshold)
                 self._send_outage_notification(result, outage.started_at, threshold)
@@ -109,10 +118,31 @@ class OutageNotifier:
         """Envia alertas que foram alcancados antes da recuperacao."""
 
         elapsed_seconds = (result.checked_at - outage.started_at).total_seconds()
-        for threshold in self.thresholds_seconds:
+        for threshold in self._thresholds_for_group(result.group):
             if elapsed_seconds >= threshold and threshold not in outage.notified_thresholds:
                 outage.notified_thresholds.add(threshold)
                 self._send_outage_notification(result, outage.started_at, threshold)
+
+    def _thresholds_for_group(self, group: str) -> tuple[int, ...]:
+        """Retorna intervalos do grupo ou o padrao global."""
+
+        return self.group_thresholds_seconds.get(group.strip(), self.thresholds_seconds)
+
+    @staticmethod
+    def _normalize_group_thresholds(
+        group_thresholds_seconds: dict[str, tuple[int, ...]],
+    ) -> dict[str, tuple[int, ...]]:
+        """Normaliza intervalos especificos por grupo."""
+
+        normalized: dict[str, tuple[int, ...]] = {}
+        for group, thresholds in group_thresholds_seconds.items():
+            group_name = group.strip()
+            if not group_name:
+                continue
+
+            normalized[group_name] = normalize_thresholds_seconds(thresholds)
+
+        return normalized
 
     def _send_outage_notification(
         self,

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import ctypes
 from ctypes import wintypes
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import json
 import os
 from pathlib import Path
@@ -36,6 +36,7 @@ class NotificationSettings:
     api_key: str = ""
     whatsapp_number: str = ""
     thresholds_seconds: tuple[int, ...] = DEFAULT_NOTIFICATION_THRESHOLDS_SECONDS
+    group_thresholds_seconds: dict[str, tuple[int, ...]] = field(default_factory=dict)
     offline_failure_threshold: int = DEFAULT_OFFLINE_FAILURE_THRESHOLD
     flapping_transition_count: int = DEFAULT_FLAPPING_TRANSITION_COUNT
     flapping_window_minutes: int = DEFAULT_FLAPPING_WINDOW_MINUTES
@@ -79,6 +80,7 @@ class SecureSettingsStore:
             api_key=str(payload.get("api_key", "")).strip(),
             whatsapp_number=str(payload.get("whatsapp_number", "")).strip(),
             thresholds_seconds=_thresholds_from_payload(payload),
+            group_thresholds_seconds=_group_thresholds_from_payload(payload),
             offline_failure_threshold=_positive_int_from_payload(
                 payload,
                 "offline_failure_threshold",
@@ -104,6 +106,11 @@ class SecureSettingsStore:
             "api_key": settings.api_key,
             "whatsapp_number": settings.whatsapp_number,
             "thresholds_seconds": list(normalize_thresholds_seconds(settings.thresholds_seconds)),
+            "group_thresholds_seconds": {
+                group: list(normalize_thresholds_seconds(thresholds))
+                for group, thresholds in settings.group_thresholds_seconds.items()
+                if group.strip()
+            },
             "offline_failure_threshold": int(settings.offline_failure_threshold),
             "flapping_transition_count": int(settings.flapping_transition_count),
             "flapping_window_minutes": int(settings.flapping_window_minutes),
@@ -256,6 +263,29 @@ def _thresholds_from_payload(payload: dict[str, object]) -> tuple[int, ...]:
         return minutes_to_seconds(int(value) for value in raw_values)
     except (TypeError, ValueError):
         return DEFAULT_NOTIFICATION_THRESHOLDS_SECONDS
+
+
+def _group_thresholds_from_payload(payload: dict[str, object]) -> dict[str, tuple[int, ...]]:
+    """Carrega intervalos especificos por grupo."""
+
+    raw_groups = payload.get("group_thresholds_seconds")
+    if not isinstance(raw_groups, dict):
+        return {}
+
+    group_thresholds: dict[str, tuple[int, ...]] = {}
+    for raw_group, raw_thresholds in raw_groups.items():
+        group = str(raw_group).strip()
+        if not group or not isinstance(raw_thresholds, list):
+            continue
+
+        try:
+            group_thresholds[group] = normalize_thresholds_seconds(
+                int(value) for value in raw_thresholds
+            )
+        except (TypeError, ValueError):
+            continue
+
+    return group_thresholds
 
 
 def _positive_int_from_payload(

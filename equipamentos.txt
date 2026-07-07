@@ -1,3 +1,22 @@
 # Equipamentos monitorados
-# Formato: nome;ip
-PC TESTE;192.168.100.90
+# Formato: nome;ip;grupo;intervalo_ping_segundos
+Switch Corporativo;192.168.101.73;Equipamentos F06;1
+F11 - Giga +;177.104.127.206;Links de Internet;1
+F11 - PNet;189.126.65.78;Links de Internet;1
+F19 - Algar;187.72.35.153;Links de Internet;1
+F19 - PNet;189.126.69.158;Links de Internet;1
+F03 - Giga +;177.104.123.6;Links de Internet;1
+F03 - PNet;189.126.68.158;Links de Internet;1
+F61 - Giga +;177.104.117.22;Links de Internet;1
+F61 - PNet;189.126.68.146;Links de Internet;1
+F70 - Giga +;177.72.7.86;Links de Internet;1
+F70 - Smartlink;177.12.136.173;Links de Internet;1
+F22 - Secrel;201.49.38.248;Links de Internet;1
+F06 - Giga +;170.78.7.246;Links de Internet;1
+F06 - Algar;189.112.136.73;Links de Internet;1
+F06 - Euronet;45.226.37.249;Links de Internet;1
+F04 - Link Cariri;186.251.182.134;Links de Internet;1
+F04 - Brisa;206.42.49.178;Links de Internet;1
+F07 - Brisa;206.42.20.150;Links de Internet;1
+F21 -;206.42.16.204;Links de Internet;1
+F17 - Giga +;189.84.124.214;Links de Internet;1
