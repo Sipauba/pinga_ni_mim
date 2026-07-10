@@ -40,7 +40,7 @@ class EquipmentStore:
 
         self.file_path.write_text(
             "# Equipamentos monitorados\n"
-            "# Formato: nome;ip;grupo;intervalo_ping_segundos\n",
+            "# Formato: nome;endereco;grupo;intervalo_monitoramento_segundos\n",
             encoding="utf-8",
         )
 
@@ -91,7 +91,7 @@ class EquipmentStore:
 
         with self.file_path.open("w", encoding="utf-8", newline="") as file:
             file.write("# Equipamentos monitorados\n")
-            file.write("# Formato: nome;ip;grupo;intervalo_ping_segundos\n")
+            file.write("# Formato: nome;endereco;grupo;intervalo_monitoramento_segundos\n")
 
             writer = csv.writer(file, delimiter=";", lineterminator="\n")
             for record in records:
@@ -107,7 +107,7 @@ class EquipmentStore:
 
 
 def _parse_ping_interval(value: str) -> float:
-    """Le o intervalo de ping salvo, caindo no padrao se estiver invalido."""
+    """Le o intervalo salvo, caindo no padrao se estiver invalido."""
 
     try:
         interval = float(value.strip().replace(",", "."))

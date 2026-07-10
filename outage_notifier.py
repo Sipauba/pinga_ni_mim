@@ -12,7 +12,7 @@ from notification_config import (
     normalize_thresholds_seconds,
 )
 from outage_logger import OutageLogger
-from ping_monitor import PingResult
+from ping_monitor import PingResult, target_label
 from secure_settings import NotificationSettings
 
 
@@ -184,12 +184,12 @@ class OutageNotifier:
         duration = _format_duration(threshold_seconds)
         started_at = outage_started_at.strftime("%d/%m/%Y %H:%M:%S")
         checked_at = result.checked_at.strftime("%d/%m/%Y %H:%M:%S")
-        error = result.error or "Sem resposta ao ping"
+        error = result.error or f"Sem resposta de {target_label(result.ip_address).lower()}"
 
         return (
             "ALERTA DE DESCONEXAO\n"
-            f"Equipamento: {result.name}\n"
-            f"IP: {result.ip_address}\n"
+            f"Alvo: {result.name}\n"
+            f"{target_label(result.ip_address)}: {result.ip_address}\n"
             f"Grupo: {result.group}\n"
             f"Sem resposta ha: {duration}\n"
             f"Inicio da queda: {started_at}\n"
@@ -210,8 +210,8 @@ class OutageNotifier:
 
         return (
             "CONEXAO REESTABELECIDA\n"
-            f"Equipamento: {result.name}\n"
-            f"IP: {result.ip_address}\n"
+            f"Alvo: {result.name}\n"
+            f"{target_label(result.ip_address)}: {result.ip_address}\n"
             f"Grupo: {result.group}\n"
             f"Tempo fora: {duration}\n"
             f"Inicio da queda: {started_at_text}\n"

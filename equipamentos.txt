@@ -1,5 +1,5 @@
 # Equipamentos monitorados
-# Formato: nome;ip;grupo;intervalo_ping_segundos
+# Formato: nome;endereco;grupo;intervalo_monitoramento_segundos
 Switch Corporativo;192.168.101.73;Equipamentos F06;1
 F11 - Giga +;177.104.127.206;Links de Internet;1
 F11 - PNet;189.126.65.78;Links de Internet;1

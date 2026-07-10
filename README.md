@@ -1,6 +1,8 @@
-# Monitor de Equipamentos na Rede
+# Monitor de Equipamentos e Servicos
 
-Aplicacao em Python com Tkinter para monitorar equipamentos de rede via ping.
+Aplicacao em Python com Tkinter para monitorar equipamentos de rede, hosts e
+servicos web. IPs/hosts sao verificados via ping; URLs `http://` e `https://`
+sao verificadas por requisicao HTTP.
 
 ## Como executar
 
@@ -34,16 +36,17 @@ pasta fixa e criar apenas um atalho para ele na area de trabalho.
 
 ## Funcionalidades atuais
 
-- Cadastro de multiplos equipamentos por nome, IP e grupo.
-- Edicao de equipamentos ja cadastrados pela propria tela.
-- Intervalo de ping configuravel por equipamento.
+- Cadastro de multiplos alvos por nome, endereco e grupo.
+- O endereco pode ser IPv4, IPv6, nome de host ou URL completa `http://`/`https://`.
+- Edicao de alvos ja cadastrados pela propria tela.
+- Intervalo de monitoramento configuravel por alvo.
 - Dashboard com cards de total, online, offline, instavel, oscilando, aguardando e manutencao.
-- Resumo por grupo e filtros por grupo, status e busca por nome/IP/grupo.
+- Resumo por grupo e filtros por grupo, status e busca por nome/endereco/grupo.
 - Tabela com status, latencia, horario da ultima leitura, tempo offline e ultimo evento.
 - Historico rapido de eventos recentes na tela principal.
 - Confirmacao de offline apenas apos falhas consecutivas configuraveis.
 - Deteccao de equipamentos oscilando.
-- Janela de manutencao por equipamento para silenciar alertas temporariamente.
+- Janela de manutencao para silenciar alertas temporariamente por alvo, grupo ou todos.
 - Notificacao via WhatsApp em intervalos de queda definidos pelo usuario.
 - Intervalos de notificacao especificos por grupo, com intervalo global como padrao.
 - Notificacao via WhatsApp quando a conexao e reestabelecida apos uma queda alertada.
@@ -59,33 +62,43 @@ pasta fixa e criar apenas um atalho para ele na area de trabalho.
 - `main.py`: inicia a aplicacao.
 - `equipment_store.py`: salva e carrega os equipamentos em arquivo texto.
 - `monitor_app.py`: contem a interface grafica Tkinter.
-- `ping_monitor.py`: contem a logica de ping e as threads de monitoramento.
+- `ping_monitor.py`: contem a logica de ping/HTTP e as threads de monitoramento.
 - `secure_settings.py`: salva e carrega configuracoes sensiveis com criptografia local.
 - `notification_config.py`: contem padroes e validacao dos intervalos de notificacao.
 - `notification_client.py`: cliente HTTP que envia mensagens para a Evolution API.
 - `outage_notifier.py`: controla os limiares de queda e dispara os alertas.
 - `outage_logger.py`: registra quedas e recuperacoes em arquivo texto.
 
-## Equipamentos salvos
+## Alvos salvos
 
 Ao abrir o programa, o arquivo `equipamentos.txt` e criado automaticamente caso
 nao exista. Quando o programa estiver empacotado como executavel, esse arquivo
-fica na mesma pasta do `.exe`. Cada equipamento fica salvo em uma linha:
+fica na mesma pasta do `.exe`. Cada alvo fica salvo em uma linha:
 
 ```text
-Nome do equipamento;192.168.0.10;Grupo;IntervaloPingSegundos
+Nome do alvo;Endereco;Grupo;IntervaloMonitoramentoSegundos
+```
+
+Exemplos:
+
+```text
+Servidor Principal;192.168.0.10;Servidores;5
+Portal Cliente;https://cliente.suaempresa.com.br/health;Nuvem;30
 ```
 
 Arquivos antigos nos formatos `Nome;IP` e `Nome;IP;Grupo` continuam sendo
-lidos. Nesses casos, o equipamento entra no grupo `Sem grupo` quando nao houver
-grupo salvo e usa intervalo de ping de 1 segundo quando nao houver intervalo.
+lidos. Nesses casos, o alvo entra no grupo `Sem grupo` quando nao houver grupo
+salvo e usa intervalo de monitoramento de 1 segundo quando nao houver intervalo.
 
-Quando um equipamento e removido pela interface, ele tambem e removido desse
-arquivo.
+Para URL web, informe o endereco completo com `http://` ou `https://`. O app
+considera online respostas HTTP 2xx/3xx e tambem 401, 403 ou 429, que costumam
+indicar servico protegido ou com limite, mas respondendo.
 
-Para editar um equipamento, selecione a linha na tabela, clique em `Editar
-selecionado`, altere nome, IP, grupo ou intervalo de ping e clique em `Salvar
-edicao`. O monitoramento desse equipamento e reiniciado com os novos dados.
+Quando um alvo e removido pela interface, ele tambem e removido desse arquivo.
+
+Para editar um alvo, selecione a linha na tabela, clique em `Editar
+selecionado`, altere nome, endereco, grupo ou intervalo e clique em `Salvar
+edicao`. O monitoramento desse alvo e reiniciado com os novos dados.
 
 ## Log de quedas
 
@@ -94,8 +107,8 @@ detectada. Ele registra:
 
 - inicio da queda;
 - fim da queda;
-- equipamento;
-- IP;
+- alvo;
+- endereco monitorado;
 - horario da queda;
 - duracao total quando a conexao volta.
 

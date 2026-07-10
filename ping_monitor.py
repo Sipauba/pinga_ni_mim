@@ -1,8 +1,9 @@
-"""Logica de ping usada pela interface grafica.
+"""Logica de monitoramento usada pela interface grafica.
 
-Este modulo nao conhece Tkinter. Ele apenas executa pings em segundo plano e
-entrega os resultados para uma funcao de callback. Essa separacao facilita
-manter a interface responsiva e, depois, adicionar notificacoes de queda.
+Este modulo nao conhece Tkinter. Ele apenas executa verificacoes em segundo
+plano e entrega os resultados para uma funcao de callback. Enderecos IP/hosts
+sao monitorados por ping ICMP; URLs http/https sao monitoradas por requisicao
+HTTP.
 """
 
 from __future__ import annotations
@@ -15,11 +16,14 @@ import subprocess
 import threading
 import time
 from typing import Callable
+import urllib.error
+import urllib.request
+from urllib.parse import urlparse
 
 
 @dataclass(frozen=True)
 class PingResult:
-    """Resultado de uma tentativa de ping."""
+    """Resultado de uma tentativa de monitoramento."""
 
     name: str
     ip_address: str
@@ -32,7 +36,7 @@ class PingResult:
 
 
 class EquipmentMonitor:
-    """Executa ping periodico para um equipamento especifico."""
+    """Executa monitoramento periodico para um alvo especifico."""
 
     def __init__(
         self,
@@ -61,7 +65,7 @@ class EquipmentMonitor:
         """Solicita a parada do monitoramento.
 
         O parametro ``wait`` permite aguardar a thread encerrar. A interface usa
-        ``wait=False`` para nao travar a janela enquanto um ping esta em curso.
+        ``wait=False`` para nao travar a janela enquanto uma verificacao esta em curso.
         """
 
         self._stop_event.set()
@@ -69,11 +73,11 @@ class EquipmentMonitor:
             self._thread.join(timeout=2)
 
     def _run(self) -> None:
-        """Loop principal: pinga, envia resultado e aguarda o proximo ciclo."""
+        """Loop principal: verifica, envia resultado e aguarda o proximo ciclo."""
 
         while not self._stop_event.is_set():
             started_at = time.monotonic()
-            is_online, latency_ms, error = ping_once(self.ip_address, self.timeout_ms)
+            is_online, latency_ms, error = check_once(self.ip_address, self.timeout_ms)
 
             self.result_callback(
                 PingResult(
@@ -90,6 +94,15 @@ class EquipmentMonitor:
             elapsed = time.monotonic() - started_at
             wait_time = max(0.0, self.interval_seconds - elapsed)
             self._stop_event.wait(wait_time)
+
+
+def check_once(target: str, timeout_ms: int = 1000) -> tuple[bool, float | None, str | None]:
+    """Executa uma verificacao unica para IP/host ou URL."""
+
+    if is_http_url(target):
+        return http_check_once(target, timeout_ms)
+
+    return ping_once(target, timeout_ms)
 
 
 def ping_once(ip_address: str, timeout_ms: int = 1000) -> tuple[bool, float | None, str | None]:
@@ -127,6 +140,88 @@ def ping_once(ip_address: str, timeout_ms: int = 1000) -> tuple[bool, float | No
     error = None if is_online else _summarize_error(output)
 
     return is_online, latency_ms, error
+
+
+def http_check_once(url: str, timeout_ms: int = 1000) -> tuple[bool, float | None, str | None]:
+    """Verifica uma URL HTTP/HTTPS e retorna status, latencia e erro resumido."""
+
+    timeout_seconds = max(0.1, timeout_ms / 1000)
+    started_at = time.monotonic()
+
+    try:
+        status_code, reason = _request_http_status(url, timeout_seconds, method="HEAD")
+        if status_code in _HTTP_METHOD_NOT_ALLOWED_STATUSES:
+            status_code, reason = _request_http_status(url, timeout_seconds, method="GET")
+    except TimeoutError:
+        return False, None, "Tempo limite excedido"
+    except urllib.error.URLError as exc:
+        return False, None, _summarize_url_error(exc.reason)
+    except OSError as exc:
+        return False, None, str(exc)[:120]
+
+    latency_ms = (time.monotonic() - started_at) * 1000
+    is_online = _is_successful_http_status(status_code)
+    error = None if is_online else _summarize_http_status(status_code, reason)
+
+    return is_online, latency_ms, error
+
+
+def is_http_url(value: str) -> bool:
+    """Indica se o alvo e uma URL http/https completa."""
+
+    parsed = urlparse(value.strip())
+    return parsed.scheme.lower() in {"http", "https"} and bool(parsed.netloc)
+
+
+def target_label(value: str) -> str:
+    """Retorna o rotulo usado em logs e alertas para o alvo monitorado."""
+
+    return "URL" if is_http_url(value) else "IP/Host"
+
+
+def _request_http_status(url: str, timeout_seconds: float, method: str) -> tuple[int, str]:
+    """Executa a requisicao HTTP e devolve status mesmo em respostas 4xx/5xx."""
+
+    request = urllib.request.Request(
+        url,
+        method=method,
+        headers={"User-Agent": "PingaNiMim/1.0"},
+    )
+
+    try:
+        with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
+            return response.status, response.reason
+    except urllib.error.HTTPError as exc:
+        reason = getattr(exc, "reason", "") or getattr(exc, "msg", "") or "Erro HTTP"
+        exc.close()
+        return exc.code, str(reason)
+
+
+def _is_successful_http_status(status_code: int) -> bool:
+    """Define quais respostas HTTP indicam servico disponivel.
+
+    401/403 costumam aparecer em servicos protegidos por login ou firewall de
+    aplicacao. 429 tambem indica que o servico respondeu, apesar do limite.
+    """
+
+    return 200 <= status_code < 400 or status_code in _HTTP_AUTH_OR_LIMIT_STATUSES
+
+
+def _summarize_http_status(status_code: int, reason: str) -> str:
+    """Resume uma resposta HTTP considerada indisponivel."""
+
+    reason_text = str(reason).strip()
+    if reason_text:
+        return f"HTTP {status_code} {reason_text}"[:120]
+
+    return f"HTTP {status_code}"
+
+
+def _summarize_url_error(reason: object) -> str:
+    """Resume erros de conexao, DNS, TLS e timeout."""
+
+    message = str(reason).strip()
+    return (message or "Falha ao acessar URL")[:120]
 
 
 def _is_successful_ping(
@@ -197,3 +292,6 @@ _PING_FAILURE_MARKERS = (
     "esgotado",
     "100% de perda",
 )
+
+_HTTP_AUTH_OR_LIMIT_STATUSES = {401, 403, 429}
+_HTTP_METHOD_NOT_ALLOWED_STATUSES = {405, 501}

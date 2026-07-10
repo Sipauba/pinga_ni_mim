@@ -1,4 +1,4 @@
-"""Interface Tkinter para monitorar equipamentos de rede por ping."""
+"""Interface Tkinter para monitorar equipamentos, hosts e servicos web."""
 
 from __future__ import annotations
 
@@ -44,7 +44,7 @@ STATUS_FILTER_OPTIONS = (
 
 @dataclass
 class EquipmentRuntimeState:
-    """Estado operacional derivado dos resultados de ping."""
+    """Estado operacional derivado dos resultados de monitoramento."""
 
     failure_streak: int = 0
     confirmed_status: bool | None = None
@@ -66,11 +66,11 @@ class NetworkMonitorApp(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
 
-        self.title("Monitor de Equipamentos na Rede")
+        self.title("Monitor de Equipamentos e Servicos")
         self.geometry("1180x760")
         self.minsize(980, 620)
 
-        # A fila recebe resultados vindos das threads de ping. O Tkinter so deve
+        # A fila recebe resultados vindos das threads de monitoramento. O Tkinter so deve
         # ser atualizado pela thread principal, por isso a UI consulta essa fila.
         self._result_queue: queue.Queue[PingResult] = queue.Queue()
 
@@ -99,7 +99,8 @@ class NetworkMonitorApp(tk.Tk):
         self.status_filter_var = tk.StringVar(value=STATUS_FILTER_ALL)
         self.search_var = tk.StringVar()
         self.maintenance_minutes_var = tk.StringVar(value="60")
-        self.summary_var = tk.StringVar(value="Nenhum equipamento monitorado")
+        self.maintenance_group_var = tk.StringVar(value=DEFAULT_EQUIPMENT_GROUP)
+        self.summary_var = tk.StringVar(value="Nenhum alvo monitorado")
         self.dashboard_vars = {
             "total": tk.StringVar(value="0"),
             "online": tk.StringVar(value="0"),
@@ -189,7 +190,7 @@ class NetworkMonitorApp(tk.Tk):
         header.grid(row=0, column=0, sticky="ew", pady=(0, 10))
         header.columnconfigure(0, weight=1)
 
-        ttk.Label(header, text="Monitor de Equipamentos", style="Title.TLabel").grid(
+        ttk.Label(header, text="Monitor de Equipamentos e Servicos", style="Title.TLabel").grid(
             row=0, column=0, sticky="w"
         )
         ttk.Label(header, textvariable=self.summary_var, style="Summary.TLabel").grid(
@@ -198,7 +199,7 @@ class NetworkMonitorApp(tk.Tk):
 
         self._build_dashboard_cards(parent)
 
-        self.equipment_form = ttk.LabelFrame(parent, text="Novo equipamento", padding=12)
+        self.equipment_form = ttk.LabelFrame(parent, text="Novo alvo", padding=12)
         self.equipment_form.grid(row=2, column=0, sticky="ew", pady=(0, 10))
         self.equipment_form.columnconfigure(1, weight=1)
         self.equipment_form.columnconfigure(3, weight=1)
@@ -208,7 +209,7 @@ class NetworkMonitorApp(tk.Tk):
         name_entry = ttk.Entry(form, textvariable=self.name_var)
         name_entry.grid(row=0, column=1, sticky="ew", padx=(0, 12))
 
-        ttk.Label(form, text="IP").grid(row=0, column=2, sticky="w", padx=(0, 8))
+        ttk.Label(form, text="IP/Host/URL").grid(row=0, column=2, sticky="w", padx=(0, 8))
         ip_entry = ttk.Entry(form, textvariable=self.ip_var)
         ip_entry.grid(row=0, column=3, sticky="ew", padx=(0, 12))
         ip_entry.bind("<Return>", lambda _event: self._save_equipment_form())
@@ -218,7 +219,7 @@ class NetworkMonitorApp(tk.Tk):
         self.group_entry.grid(row=1, column=1, sticky="ew", padx=(0, 12), pady=(10, 0))
         self.group_entry.bind("<Return>", lambda _event: self._save_equipment_form())
 
-        ttk.Label(form, text="Ping (s)").grid(row=1, column=2, sticky="w", padx=(0, 8))
+        ttk.Label(form, text="Intervalo (s)").grid(row=1, column=2, sticky="w", padx=(0, 8))
         ping_entry = ttk.Entry(form, textvariable=self.ping_interval_var, width=10)
         ping_entry.grid(row=1, column=3, sticky="w", pady=(10, 0))
         ping_entry.bind("<Return>", lambda _event: self._save_equipment_form())
@@ -381,8 +382,8 @@ class NetworkMonitorApp(tk.Tk):
         self.tree = ttk.Treeview(table_frame, columns=columns, show="headings", selectmode="browse")
         headings = {
             "group": "Grupo",
-            "name": "Equipamento",
-            "ip": "IP",
+            "name": "Alvo",
+            "ip": "Endereco",
             "status": "Status",
             "latency": "Latencia",
             "checked_at": "Ultima leitura",
@@ -393,7 +394,7 @@ class NetworkMonitorApp(tk.Tk):
         widths = {
             "group": 130,
             "name": 170,
-            "ip": 130,
+            "ip": 210,
             "status": 105,
             "latency": 90,
             "checked_at": 110,
@@ -443,7 +444,7 @@ class NetworkMonitorApp(tk.Tk):
             selectmode="none",
         )
         self.events_tree.heading("time", text="Hora")
-        self.events_tree.heading("equipment", text="Equipamento")
+        self.events_tree.heading("equipment", text="Alvo")
         self.events_tree.heading("event", text="Evento")
         self.events_tree.heading("group", text="Grupo")
         self.events_tree.column("time", width=90, minwidth=80, anchor="center")
@@ -457,7 +458,7 @@ class NetworkMonitorApp(tk.Tk):
 
         actions = ttk.Frame(parent)
         actions.grid(row=6, column=0, sticky="ew", pady=(10, 0))
-        actions.columnconfigure(5, weight=1)
+        actions.columnconfigure(7, weight=1)
 
         ttk.Label(actions, text="Manutencao (min)").grid(
             row=0,
@@ -471,28 +472,74 @@ class NetworkMonitorApp(tk.Tk):
             sticky="w",
             padx=(0, 8),
         )
-        ttk.Button(actions, text="Silenciar alertas", command=self._start_maintenance).grid(
+        ttk.Label(actions, text="Grupo").grid(
             row=0,
             column=2,
             sticky="w",
             padx=(0, 8),
         )
-        ttk.Button(actions, text="Encerrar manutencao", command=self._end_maintenance).grid(
+        self.maintenance_group_combo = ttk.Combobox(
+            actions,
+            textvariable=self.maintenance_group_var,
+            state="readonly",
+            values=(DEFAULT_EQUIPMENT_GROUP,),
+            width=18,
+        )
+        self.maintenance_group_combo.grid(
             row=0,
             column=3,
             sticky="w",
             padx=(0, 8),
         )
-        ttk.Button(actions, text="Editar selecionado", command=self._edit_selected).grid(
+        ttk.Button(actions, text="Silenciar selecionado", command=self._start_maintenance).grid(
             row=0,
             column=4,
             sticky="w",
             padx=(0, 8),
         )
-        ttk.Button(actions, text="Remover selecionado", command=self._remove_selected).grid(
+        ttk.Button(actions, text="Silenciar grupo", command=self._start_group_maintenance).grid(
+            row=0,
+            column=5,
+            sticky="w",
+            padx=(0, 8),
+        )
+        ttk.Button(actions, text="Silenciar todos", command=self._start_all_maintenance).grid(
             row=0,
             column=6,
+            sticky="w",
+        )
+        ttk.Button(actions, text="Encerrar selecionado", command=self._end_maintenance).grid(
+            row=1,
+            column=4,
+            sticky="w",
+            padx=(0, 8),
+            pady=(8, 0),
+        )
+        ttk.Button(actions, text="Encerrar grupo", command=self._end_group_maintenance).grid(
+            row=1,
+            column=5,
+            sticky="w",
+            padx=(0, 8),
+            pady=(8, 0),
+        )
+        ttk.Button(actions, text="Encerrar todos", command=self._end_all_maintenance).grid(
+            row=1,
+            column=6,
+            sticky="w",
+            pady=(8, 0),
+        )
+        ttk.Button(actions, text="Editar selecionado", command=self._edit_selected).grid(
+            row=1,
+            column=8,
+            sticky="w",
+            padx=(0, 8),
+            pady=(8, 0),
+        )
+        ttk.Button(actions, text="Remover selecionado", command=self._remove_selected).grid(
+            row=1,
+            column=9,
             sticky="e",
+            pady=(8, 0),
         )
 
     def _build_settings_tab(self, parent: ttk.Frame) -> None:
@@ -601,7 +648,7 @@ class NetworkMonitorApp(tk.Tk):
             "Exemplo: 5s, 30s, 1m, 5m.\n\n"
             "Alertas por grupo: cadastre intervalos diferentes para grupos especificos. "
             "Quando nao houver regra para o grupo, vale o intervalo global acima.\n\n"
-            "Falhas p/ offline: quantidade de pings seguidos sem resposta antes de "
+            "Falhas p/ offline: quantidade de verificacoes seguidas sem resposta antes de "
             "confirmar queda. Oscilacao: quantidade de mudancas online/offline dentro "
             "da janela em minutos.\n\n"
             "Numero ou grupo: para telefone, informe o numero com DDI e DDD. Para grupo, use o JID "
@@ -922,16 +969,22 @@ class NetworkMonitorApp(tk.Tk):
             return
 
         if not name or not ip_address:
-            messagebox.showwarning("Campos obrigatorios", "Informe o nome e o IP do equipamento.")
+            messagebox.showwarning("Campos obrigatorios", "Informe o nome e o endereco do alvo.")
             return
 
-        if not self._is_valid_ip(ip_address):
-            messagebox.showwarning("IP invalido", "Informe um endereco IPv4 ou IPv6 valido.")
+        if not self._is_valid_monitoring_target(ip_address):
+            messagebox.showwarning(
+                "Endereco invalido",
+                "Informe um IP, nome de host ou URL completa com http:// ou https://.",
+            )
             return
 
         editing_ip = self._editing_ip
         if ip_address in self._monitors and ip_address != editing_ip:
-            messagebox.showwarning("IP duplicado", "Esse IP ja esta sendo monitorado.")
+            messagebox.showwarning(
+                "Endereco duplicado",
+                "Esse endereco ja esta sendo monitorado.",
+            )
             return
 
         if editing_ip is not None:
@@ -952,7 +1005,7 @@ class NetworkMonitorApp(tk.Tk):
         self._update_summary()
 
     def _edit_selected(self) -> None:
-        """Carrega o equipamento selecionado no formulario para edicao."""
+        """Carrega o alvo selecionado no formulario para edicao."""
 
         ip_address = self._get_selected_ip()
         if ip_address is None:
@@ -967,7 +1020,7 @@ class NetworkMonitorApp(tk.Tk):
         self.ip_var.set(monitor.ip_address)
         self.group_var.set(monitor.group)
         self.ping_interval_var.set(self._format_seconds(monitor.interval_seconds))
-        self.equipment_form.configure(text="Editar equipamento")
+        self.equipment_form.configure(text="Editar alvo")
         self.save_equipment_button.configure(text="Salvar edicao")
         self.cancel_edit_button.configure(state="normal")
 
@@ -979,7 +1032,7 @@ class NetworkMonitorApp(tk.Tk):
         self.ip_var.set("")
         self.group_var.set(DEFAULT_EQUIPMENT_GROUP)
         self.ping_interval_var.set(self._format_seconds(DEFAULT_PING_INTERVAL_SECONDS))
-        self.equipment_form.configure(text="Novo equipamento")
+        self.equipment_form.configure(text="Novo alvo")
         self.save_equipment_button.configure(text="Adicionar")
         self.cancel_edit_button.configure(state="disabled")
 
@@ -988,7 +1041,7 @@ class NetworkMonitorApp(tk.Tk):
 
         selection = self.tree.selection()
         if not selection:
-            messagebox.showinfo("Remover equipamento", "Selecione um equipamento na tabela.")
+            messagebox.showinfo("Remover alvo", "Selecione um alvo na tabela.")
             return
 
         ip_address = self._ip_by_item.get(selection[0])
@@ -1007,7 +1060,7 @@ class NetworkMonitorApp(tk.Tk):
         self._update_summary()
 
     def _remove_equipment_by_ip(self, ip_address: str, save: bool = True) -> None:
-        """Remove um equipamento pelo IP, parando seu monitor."""
+        """Remove um alvo pelo endereco, parando seu monitor."""
 
         item_id = self._items_by_ip.pop(ip_address, None)
         if item_id is not None:
@@ -1036,7 +1089,7 @@ class NetworkMonitorApp(tk.Tk):
         duplicated_ips: list[str] = []
 
         for record in self._store.load():
-            if not self._is_valid_ip(record.ip_address):
+            if not self._is_valid_monitoring_target(record.ip_address):
                 invalid_records.append(record)
                 continue
 
@@ -1055,9 +1108,9 @@ class NetworkMonitorApp(tk.Tk):
 
         if invalid_records or duplicated_ips:
             messagebox.showwarning(
-                "Equipamentos ignorados",
+                "Alvos ignorados",
                 "Algumas linhas do arquivo equipamentos.txt foram ignoradas "
-                "por IP invalido ou duplicado.",
+                "por endereco invalido ou duplicado.",
             )
 
     def _start_monitoring(
@@ -1067,7 +1120,7 @@ class NetworkMonitorApp(tk.Tk):
         group: str,
         ping_interval_seconds: float,
     ) -> None:
-        """Cria a linha na tabela e inicia o ping periodico."""
+        """Cria a linha na tabela e inicia o monitoramento periodico."""
 
         group = self._normalize_group(group)
         monitor = EquipmentMonitor(
@@ -1276,6 +1329,18 @@ class NetworkMonitorApp(tk.Tk):
         else:
             state.display_status = STATUS_WAITING
 
+    def _operational_status_for_counts(self, state: EquipmentRuntimeState) -> str:
+        """Retorna o status real usado nos contadores, ignorando manutencao."""
+
+        if state.is_flapping:
+            return STATUS_FLAPPING
+        if state.confirmed_status is True:
+            return STATUS_UNSTABLE if state.failure_streak else STATUS_ONLINE
+        if state.confirmed_status is False:
+            return STATUS_OFFLINE
+
+        return STATUS_WAITING
+
     def _render_equipment_row(self, ip_address: str) -> None:
         """Renderiza uma linha da tabela com o estado operacional atual."""
 
@@ -1327,7 +1392,7 @@ class NetworkMonitorApp(tk.Tk):
         return ""
 
     def _refresh_live_rows(self) -> None:
-        """Atualiza duracoes e paineis mesmo quando nenhum ping novo chega."""
+        """Atualiza duracoes e paineis mesmo quando nenhuma leitura nova chega."""
 
         for ip_address in list(self._runtime_by_ip):
             self._update_display_status(ip_address)
@@ -1381,7 +1446,7 @@ class NetworkMonitorApp(tk.Tk):
             )
 
     def _count_statuses(self, ip_addresses: list[str]) -> dict[str, int]:
-        """Conta status visuais para os IPs informados."""
+        """Conta status operacionais e alvos em manutencao."""
 
         counts = {
             STATUS_ONLINE: 0,
@@ -1393,8 +1458,10 @@ class NetworkMonitorApp(tk.Tk):
         }
         for ip_address in ip_addresses:
             state = self._runtime_by_ip.get(ip_address)
-            status = state.display_status if state else STATUS_WAITING
+            status = self._operational_status_for_counts(state) if state else STATUS_WAITING
             counts[status] = counts.get(status, 0) + 1
+            if state is not None and self._is_in_maintenance(state, datetime.now()):
+                counts[STATUS_MAINTENANCE] += 1
 
         return counts
 
@@ -1448,62 +1515,177 @@ class NetworkMonitorApp(tk.Tk):
         if not values:
             return
 
-        self.group_filter_var.set(str(values[0]))
+        group = str(values[0])
+        self.group_filter_var.set(group)
+        self.maintenance_group_var.set(group)
         self._apply_filters()
 
     def _start_maintenance(self) -> None:
-        """Silencia alertas do equipamento selecionado por alguns minutos."""
+        """Silencia alertas do alvo selecionado por alguns minutos."""
 
         ip_address = self._get_selected_ip()
         if ip_address is None:
             return
 
+        minutes = self._get_maintenance_minutes()
+        if minutes is None:
+            return
+
+        self._apply_maintenance_to_ips(
+            [ip_address],
+            minutes,
+            event_text=f"Manutencao por {minutes} min",
+        )
+
+    def _start_group_maintenance(self) -> None:
+        """Silencia alertas dos alvos do grupo escolhido."""
+
+        minutes = self._get_maintenance_minutes()
+        if minutes is None:
+            return
+
+        group = self._normalize_group(self.maintenance_group_var.get())
+        ip_addresses = self._ips_for_group(group)
+        if not ip_addresses:
+            messagebox.showinfo("Manutencao", "Nenhum alvo encontrado nesse grupo.")
+            return
+
+        self._apply_maintenance_to_ips(
+            ip_addresses,
+            minutes,
+            event_text=f"Manutencao do grupo {group} por {minutes} min",
+        )
+
+    def _start_all_maintenance(self) -> None:
+        """Silencia alertas de todos os alvos monitorados."""
+
+        minutes = self._get_maintenance_minutes()
+        if minutes is None:
+            return
+
+        ip_addresses = list(self._monitors)
+        if not ip_addresses:
+            messagebox.showinfo("Manutencao", "Nenhum alvo monitorado.")
+            return
+
+        self._apply_maintenance_to_ips(
+            ip_addresses,
+            minutes,
+            event_text=f"Manutencao geral por {minutes} min",
+        )
+
+    def _get_maintenance_minutes(self) -> int | None:
+        """Le e valida os minutos de manutencao informados."""
+
         try:
-            minutes = self._parse_positive_int(
+            return self._parse_positive_int(
                 self.maintenance_minutes_var.get(),
                 "Manutencao",
             )
         except ValueError as exc:
             messagebox.showwarning("Manutencao invalida", str(exc))
-            return
+            return None
 
-        state = self._runtime_by_ip.setdefault(ip_address, EquipmentRuntimeState())
-        state.maintenance_until = datetime.now() + timedelta(minutes=minutes)
-        state.last_event = f"Manutencao ate {state.maintenance_until:%H:%M:%S}"
-        self._outage_notifier.clear(ip_address)
-        self._record_event(ip_address, f"Manutencao por {minutes} min", datetime.now())
-        self._update_display_status(ip_address)
-        self._render_equipment_row(ip_address)
-        self._refresh_dashboard()
-        self._refresh_group_summary()
-        self._apply_filters()
+    def _apply_maintenance_to_ips(
+        self,
+        ip_addresses: list[str],
+        minutes: int,
+        event_text: str,
+    ) -> None:
+        """Aplica uma janela de manutencao para varios alvos."""
+
+        now = datetime.now()
+        maintenance_until = now + timedelta(minutes=minutes)
+
+        for ip_address in ip_addresses:
+            state = self._runtime_by_ip.setdefault(ip_address, EquipmentRuntimeState())
+            state.maintenance_until = maintenance_until
+            state.last_event = f"Manutencao ate {maintenance_until:%H:%M:%S}"
+            self._outage_notifier.clear(ip_address)
+            self._record_event(ip_address, event_text, now)
+            self._update_display_status(ip_address)
+            self._render_equipment_row(ip_address)
+
+        self._refresh_after_maintenance_change()
 
     def _end_maintenance(self) -> None:
-        """Encerra a janela de manutencao do equipamento selecionado."""
+        """Encerra a janela de manutencao do alvo selecionado."""
 
         ip_address = self._get_selected_ip()
         if ip_address is None:
             return
 
-        state = self._runtime_by_ip.get(ip_address)
-        if state is None:
+        self._clear_maintenance_for_ips([ip_address], "Manutencao encerrada")
+
+    def _end_group_maintenance(self) -> None:
+        """Encerra a manutencao dos alvos do grupo escolhido."""
+
+        group = self._normalize_group(self.maintenance_group_var.get())
+        ip_addresses = self._ips_for_group(group)
+        if not ip_addresses:
+            messagebox.showinfo("Manutencao", "Nenhum alvo encontrado nesse grupo.")
             return
 
-        state.maintenance_until = None
-        state.last_event = f"Manutencao encerrada as {datetime.now():%H:%M:%S}"
-        self._record_event(ip_address, "Manutencao encerrada", datetime.now())
-        self._update_display_status(ip_address)
-        self._render_equipment_row(ip_address)
+        self._clear_maintenance_for_ips(
+            ip_addresses,
+            f"Manutencao do grupo {group} encerrada",
+        )
+
+    def _end_all_maintenance(self) -> None:
+        """Encerra a manutencao de todos os alvos."""
+
+        ip_addresses = list(self._monitors)
+        if not ip_addresses:
+            messagebox.showinfo("Manutencao", "Nenhum alvo monitorado.")
+            return
+
+        self._clear_maintenance_for_ips(ip_addresses, "Manutencao geral encerrada")
+
+    def _clear_maintenance_for_ips(self, ip_addresses: list[str], event_text: str) -> None:
+        """Remove a janela de manutencao de varios alvos."""
+
+        now = datetime.now()
+        changed = False
+
+        for ip_address in ip_addresses:
+            state = self._runtime_by_ip.get(ip_address)
+            if state is None or state.maintenance_until is None:
+                continue
+
+            state.maintenance_until = None
+            state.last_event = f"{event_text} as {now:%H:%M:%S}"
+            self._record_event(ip_address, event_text, now)
+            self._update_display_status(ip_address)
+            self._render_equipment_row(ip_address)
+            changed = True
+
+        if not changed:
+            messagebox.showinfo("Manutencao", "Nenhum alvo estava em manutencao.")
+
+        self._refresh_after_maintenance_change()
+
+    def _ips_for_group(self, group: str) -> list[str]:
+        """Retorna os enderecos dos alvos de um grupo."""
+
+        return [
+            ip_address
+            for ip_address, equipment_group in self._group_by_ip.items()
+            if equipment_group == group
+        ]
+
+    def _refresh_after_maintenance_change(self) -> None:
+        """Atualiza os paineis depois de aplicar ou encerrar manutencao."""
+
         self._refresh_dashboard()
         self._refresh_group_summary()
         self._apply_filters()
 
     def _get_selected_ip(self) -> str | None:
-        """Retorna o IP selecionado na tabela principal."""
+        """Retorna o endereco selecionado na tabela principal."""
 
         selection = self.tree.selection()
         if not selection:
-            messagebox.showinfo("Equipamento", "Selecione um equipamento na tabela.")
+            messagebox.showinfo("Alvo", "Selecione um alvo na tabela.")
             return None
 
         return self._ip_by_item.get(selection[0])
@@ -1513,7 +1695,7 @@ class NetworkMonitorApp(tk.Tk):
 
         total = len(self._monitors)
         if total == 0:
-            self.summary_var.set("Nenhum equipamento monitorado")
+            self.summary_var.set("Nenhum alvo monitorado")
             return
 
         filtered_ips = self._get_filtered_ips()
@@ -1527,7 +1709,7 @@ class NetworkMonitorApp(tk.Tk):
         if self.search_var.get().strip():
             filters.append(f"Busca: {self.search_var.get().strip()}")
 
-        filter_text = " | ".join(filters) if filters else "Todos os equipamentos"
+        filter_text = " | ".join(filters) if filters else "Todos os alvos"
 
         self.summary_var.set(
             f"{filter_text} | Exibindo {visible_total} de {total} | "
@@ -1557,6 +1739,12 @@ class NetworkMonitorApp(tk.Tk):
         )
 
         self.group_entry.configure(values=tuple(ordered_groups))
+        if hasattr(self, "maintenance_group_combo"):
+            self.maintenance_group_combo.configure(values=tuple(ordered_groups))
+
+        if self.maintenance_group_var.get() not in ordered_groups:
+            self.maintenance_group_var.set(ordered_groups[0])
+
         filter_values = (GROUP_FILTER_ALL, *ordered_groups)
         self.group_filter_combo.configure(values=filter_values)
 
@@ -1589,7 +1777,7 @@ class NetworkMonitorApp(tk.Tk):
         self._update_summary()
 
     def _matches_filters(self, ip_address: str) -> bool:
-        """Indica se um equipamento passa pelos filtros atuais."""
+        """Indica se um alvo passa pelos filtros atuais."""
 
         monitor = self._monitors.get(ip_address)
         state = self._runtime_by_ip.get(ip_address)
@@ -1614,7 +1802,7 @@ class NetworkMonitorApp(tk.Tk):
         return True
 
     def _get_filtered_ips(self) -> list[str]:
-        """Retorna os IPs considerados pelo resumo atual."""
+        """Retorna os enderecos considerados pelo resumo atual."""
 
         return [ip_address for ip_address in self._monitors if self._matches_filters(ip_address)]
 
@@ -1634,19 +1822,21 @@ class NetworkMonitorApp(tk.Tk):
 
     @staticmethod
     def _parse_ping_interval(value: str) -> float:
-        """Valida o intervalo de ping informado no cadastro."""
+        """Valida o intervalo de monitoramento informado no cadastro."""
 
         try:
             parsed = float(value.strip().replace(",", "."))
         except ValueError as exc:
-            raise ValueError("Informe o intervalo de ping em segundos.") from exc
+            raise ValueError("Informe o intervalo de monitoramento em segundos.") from exc
 
         if not math.isfinite(parsed):
-            raise ValueError("Informe um intervalo de ping valido.")
+            raise ValueError("Informe um intervalo de monitoramento valido.")
         if parsed < 1:
-            raise ValueError("O intervalo de ping deve ser de pelo menos 1 segundo.")
+            raise ValueError("O intervalo de monitoramento deve ser de pelo menos 1 segundo.")
         if parsed > 3600:
-            raise ValueError("O intervalo de ping deve ser menor ou igual a 3600 segundos.")
+            raise ValueError(
+                "O intervalo de monitoramento deve ser menor ou igual a 3600 segundos."
+            )
 
         return parsed
 
@@ -1707,9 +1897,44 @@ class NetworkMonitorApp(tk.Tk):
 
         return True
 
+    @classmethod
+    def _is_valid_monitoring_target(cls, value: str) -> bool:
+        """Confere se o alvo pode ser monitorado por ping ou HTTP."""
+
+        target = value.strip()
+        if not target:
+            return False
+
+        if cls._is_valid_ip(target) or cls._is_valid_url(target):
+            return True
+
+        if "://" in target or "/" in target:
+            return False
+
+        return cls._is_valid_hostname(target)
+
+    @staticmethod
+    def _is_valid_hostname(value: str) -> bool:
+        """Confere nomes de host simples para monitoramento via ping."""
+
+        hostname = value.strip().rstrip(".")
+        if not hostname or len(hostname) > 253:
+            return False
+
+        labels = hostname.split(".")
+        for label in labels:
+            if not label or len(label) > 63:
+                return False
+            if label.startswith("-") or label.endswith("-"):
+                return False
+            if not all(character.isalnum() or character in {"-", "_"} for character in label):
+                return False
+
+        return True
+
     @staticmethod
     def _is_valid_url(value: str) -> bool:
         """Confere se a URL informada tem protocolo e endereco."""
 
         parsed = urlparse(value)
-        return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
+        return parsed.scheme.lower() in {"http", "https"} and bool(parsed.netloc)

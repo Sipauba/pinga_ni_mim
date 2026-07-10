@@ -1,8 +1,10 @@
-LEIAME - Monitor de Equipamentos na Rede
-========================================
+LEIAME - Monitor de Equipamentos e Servicos
+===========================================
 
-Esta aplicacao monitora equipamentos da rede usando ping. Ela foi feita em
-Python com interface grafica Tkinter.
+Esta aplicacao monitora equipamentos da rede, hosts e servicos web. IPs e
+nomes de host sao verificados usando ping. URLs http:// e https:// sao
+verificadas por requisicao HTTP. Ela foi feita em Python com interface grafica
+Tkinter.
 
 
 1. Como executar
@@ -26,21 +28,23 @@ O arquivo quedas_log.txt tambem sera criado nessa pasta quando a primeira queda
 for detectada.
 
 
-2. Como adicionar equipamentos
-------------------------------
+2. Como adicionar alvos
+-----------------------
 
 Na tela principal existem quatro campos:
 
-- Nome: identificacao do equipamento, por exemplo "Servidor", "Roteador" ou
-  "Computador Financeiro".
-- IP: endereco IP do equipamento, por exemplo "192.168.0.10".
+- Nome: identificacao do alvo, por exemplo "Servidor", "Roteador",
+  "Computador Financeiro" ou "Portal Cliente".
+- IP/Host/URL: endereco monitorado. Pode ser um IP como "192.168.0.10", um
+  host como "servidor.local" ou uma URL completa como
+  "https://cliente.suaempresa.com.br/health".
 - Grupo: categoria criada pelo usuario, por exemplo "Computadores",
-  "Servidores" ou "Equipamentos de rede".
-- Ping (s): intervalo de ping desse equipamento, em segundos.
+  "Servidores", "Equipamentos de rede" ou "Nuvem".
+- Intervalo (s): intervalo de monitoramento desse alvo, em segundos.
 
 Depois de preencher os campos, clique em "Adicionar".
 
-O equipamento sera inserido na tabela e o programa comecara a fazer ping
+O alvo sera inserido na tabela e o programa comecara a verificar
 automaticamente no intervalo informado.
 
 
@@ -49,15 +53,15 @@ automaticamente no intervalo informado.
 
 A tabela mostra:
 
-- Equipamento: nome informado pelo usuario.
+- Alvo: nome informado pelo usuario.
 - Grupo: categoria informada no cadastro.
-- IP: endereco monitorado.
+- Endereco: IP, host ou URL monitorada.
 - Status: Online, Offline, Instavel, Oscilando, Aguardando ou Manutencao.
-- Latencia: tempo de resposta do ping, quando disponivel.
+- Latencia: tempo de resposta do ping ou da requisicao HTTP, quando disponivel.
 - Ultima leitura: horario da ultima verificacao.
 - Tempo offline: duracao da queda confirmada.
 - Ultimo evento: ultima mudanca importante detectada.
-- Mensagem: erro retornado pelo ping quando o equipamento esta offline.
+- Mensagem: erro retornado pela verificacao quando o alvo esta offline.
 
 A tela tambem mostra cards de resumo, resumo por grupo, eventos recentes e
 filtros por grupo, status e busca.
@@ -66,7 +70,7 @@ filtros por grupo, status e busca.
 4. Salvamento automatico
 ------------------------
 
-Os equipamentos adicionados sao salvos automaticamente no arquivo:
+Os alvos adicionados sao salvos automaticamente no arquivo:
 
 equipamentos.txt
 
@@ -74,35 +78,40 @@ Esse arquivo e criado pelo proprio programa caso ainda nao exista.
 
 Cada linha do arquivo segue o formato:
 
-Nome do equipamento;IP;Grupo;IntervaloPingSegundos
+Nome do alvo;Endereco;Grupo;IntervaloMonitoramentoSegundos
 
 Exemplo:
 
 Servidor Principal;192.168.0.10;Servidores;5
+Portal Cliente;https://cliente.suaempresa.com.br/health;Nuvem;30
 
 Arquivos antigos nos formatos Nome;IP e Nome;IP;Grupo continuam sendo lidos.
-Nesses casos, o equipamento entra no grupo Sem grupo quando nao houver grupo e
-usa intervalo de ping de 1 segundo quando nao houver intervalo.
+Nesses casos, o alvo entra no grupo Sem grupo quando nao houver grupo e usa
+intervalo de monitoramento de 1 segundo quando nao houver intervalo.
 
-Ao abrir o programa novamente, os equipamentos salvos nesse arquivo sao
+Para monitorar link web, informe a URL completa com http:// ou https://. O app
+considera online respostas HTTP 2xx/3xx e tambem 401, 403 ou 429, que costumam
+indicar servico protegido ou com limite, mas respondendo.
+
+Ao abrir o programa novamente, os alvos salvos nesse arquivo sao
 carregados automaticamente.
 
-Quando um equipamento e removido pela interface, ele tambem e removido do
-arquivo equipamentos.txt.
+Quando um alvo e removido pela interface, ele tambem e removido do arquivo
+equipamentos.txt.
 
 
-5. Como remover equipamentos
-----------------------------
+5. Como remover alvos
+---------------------
 
-Clique em um equipamento na tabela e depois clique em "Remover selecionado".
+Clique em um alvo na tabela e depois clique em "Remover selecionado".
 
-O monitoramento desse equipamento sera interrompido e o registro tambem sera
+O monitoramento desse alvo sera interrompido e o registro tambem sera
 removido do arquivo equipamentos.txt.
 
-Para editar um equipamento, selecione a linha na tabela e clique em
+Para editar um alvo, selecione a linha na tabela e clique em
 "Editar selecionado". O formulario sera preenchido com os dados atuais. Altere
-nome, IP, grupo ou Ping (s) e clique em "Salvar edicao". Para sair sem mudar,
-clique em "Cancelar".
+nome, endereco, grupo ou intervalo e clique em "Salvar edicao". Para sair sem
+mudar, clique em "Cancelar".
 
 
 6. Notificacoes pelo WhatsApp
@@ -139,7 +148,7 @@ Header: apikey: SUA_CHAVE
 
 A resposta lista os grupos. Copie o campo id do grupo desejado.
 
-O programa envia notificacoes quando um equipamento fica offline pelos tempos
+O programa envia notificacoes quando um alvo fica offline pelos tempos
 informados no campo Alertar apos. Separe os valores por virgula, ponto e
 virgula ou espaco. Use s para segundos, m para minutos e h para horas. Valores
 sem unidade continuam sendo tratados como minutos. Exemplos:
@@ -149,18 +158,22 @@ sem unidade continuam sendo tratados como minutos. Exemplos:
 1, 5, 15, 30
 
 Por padrao, o programa so confirma offline depois de 3 falhas seguidas. Tambem
-marca um equipamento como oscilando quando ha 4 mudancas de estado dentro de 10
+marca um alvo como oscilando quando ha 4 mudancas de estado dentro de 10
 minutos.
 
 Na area Alertas por grupo, escolha o grupo, informe os intervalos e clique em
 Salvar grupo. Para voltar ao intervalo global, selecione o grupo e clique em
 Usar global.
 
-Na tela principal, a acao Silenciar alertas cria uma janela de manutencao para
-o equipamento selecionado. Durante esse periodo ele continua sendo monitorado,
-mas nao gera alertas pelo WhatsApp.
+Na tela principal, a area Manutencao permite silenciar alertas por alguns
+minutos. Voce pode silenciar somente o alvo selecionado, todos os alvos de um
+grupo escolhido ou todos os alvos monitorados. Durante esse periodo eles
+continuam sendo monitorados, mas nao geram alertas pelo WhatsApp.
 
-Quando a conexao do equipamento e reestabelecida, o programa tambem envia uma
+Tambem e possivel encerrar a manutencao do alvo selecionado, do grupo escolhido
+ou de todos os alvos antes do tempo acabar.
+
+Quando a conexao do alvo e reestabelecida, o programa tambem envia uma
 mensagem informando a recuperacao.
 
 Para evitar mensagens desnecessarias, a notificacao de recuperacao so e enviada
@@ -177,8 +190,8 @@ quedas_log.txt
 Esse arquivo registra cada queda detectada, mesmo quando ela dura menos que o
 primeiro intervalo configurado e nao gera notificacao no WhatsApp.
 
-Quando um equipamento para de responder, o log registra o inicio da queda.
-Quando ele volta a responder, o log registra o fim da queda e a duracao total.
+Quando um alvo para de responder, o log registra o inicio da queda. Quando ele
+volta a responder, o log registra o fim da queda e a duracao total.
 
 
 8. Armazenamento das configuracoes sensiveis
@@ -209,13 +222,13 @@ main.py
 Inicia a aplicacao.
 
 monitor_app.py
-Contem a interface grafica e controla a tabela de equipamentos.
+Contem a interface grafica e controla a tabela de alvos.
 
 ping_monitor.py
-Executa os pings em segundo plano.
+Executa os pings e verificacoes HTTP em segundo plano.
 
 equipment_store.py
-Salva e carrega os equipamentos no arquivo equipamentos.txt.
+Salva e carrega os alvos no arquivo equipamentos.txt.
 
 notification_config.py
 Guarda os padroes e a validacao dos intervalos de notificacao.
@@ -236,9 +249,11 @@ Registra inicio, fim e duracao das quedas no arquivo quedas_log.txt.
 --------------------------
 
 - O computador que executa o programa precisa ter acesso a rede dos
-  equipamentos monitorados.
-- Para testar uma queda real, monitore o IP de outro equipamento. Pingar o
+  equipamentos e aos servicos web monitorados.
+- Para testar uma queda real de IP/host, monitore outro equipamento. Pingar o
   proprio computador pode nao representar corretamente a conexao fisica.
+- Para monitorar servicos em nuvem, prefira uma URL de saude ou login que
+  represente bem a disponibilidade do servico.
 - O envio de notificacoes depende do acesso ao endereco da Evolution API.
 - A URL da API, a chave, o destino do WhatsApp, os intervalos de alerta e os
   parametros do motor devem ser configurados pela aba Configuracoes.
