@@ -11,6 +11,13 @@ import tkinter as tk
 from tkinter import messagebox, ttk
 from urllib.parse import urlparse
 
+import matplotlib
+
+matplotlib.use("Agg")
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+from matplotlib.figure import Figure
+import seaborn as sns
+
 from equipment_store import (
     DEFAULT_EQUIPMENT_GROUP,
     DEFAULT_PING_INTERVAL_SECONDS,
@@ -40,6 +47,17 @@ STATUS_FILTER_OPTIONS = (
     STATUS_WAITING,
     STATUS_MAINTENANCE,
 )
+ANALYTICS_HISTORY_LIMIT = 1000
+WEEKDAY_OPTIONS = (
+    ("Seg", 0),
+    ("Ter", 1),
+    ("Qua", 2),
+    ("Qui", 3),
+    ("Sex", 4),
+    ("Sab", 5),
+    ("Dom", 6),
+)
+WEEKDAY_LABELS = {0: "Segunda", 1: "Terca", 2: "Quarta", 3: "Quinta", 4: "Sexta", 5: "Sabado", 6: "Domingo"}
 
 
 @dataclass
@@ -120,6 +138,9 @@ class NetworkMonitorApp(tk.Tk):
         self.group_alert_intervals_var = tk.StringVar()
         self.group_alert_window_start_var = tk.StringVar()
         self.group_alert_window_end_var = tk.StringVar()
+        self.group_alert_weekday_vars = {
+            weekday: tk.BooleanVar(value=True) for _label, weekday in WEEKDAY_OPTIONS
+        }
         self.group_alert_status_var = tk.StringVar(
             value="Grupos sem regra propria usam o intervalo global e notificam 24h."
         )
@@ -132,13 +153,23 @@ class NetworkMonitorApp(tk.Tk):
         self.flapping_window_minutes_var = tk.StringVar(
             value=str(self._notification_settings.flapping_window_minutes)
         )
+        self.analytics_group_var = tk.StringVar(value=GROUP_FILTER_ALL)
+        self.analytics_range_var = tk.StringVar(value="24h")
+        self.analytics_total_events_var = tk.StringVar(value="0")
+        self.analytics_group_events_var = tk.StringVar(value="0")
+        self.analytics_last_event_var = tk.StringVar(value="Sem eventos recentes")
+        self.analytics_top_group_var = tk.StringVar(value="-")
         self.show_api_key_var = tk.BooleanVar(value=False)
         self.settings_status_var = tk.StringVar(value=self._build_settings_status())
+        self._chart_palette = sns.color_palette("Blues", 6)
+        self._analytics_dirty = True
+        self._analytics_last_signature: tuple | None = None
 
         self._configure_style()
         self._build_layout()
         self._load_saved_equipment()
         self._schedule_queue_processing()
+        self._schedule_analytics_refresh()
 
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
@@ -178,7 +209,7 @@ class NetworkMonitorApp(tk.Tk):
         style.map("Secondary.TButton", background=[("active", "#cbd5e1"), ("pressed", "#cbd5e1")])
         style.configure("Danger.TButton", background="#f4d7d5", foreground=danger)
         style.map("Danger.TButton", background=[("active", "#efc4c0"), ("pressed", "#efc4c0")])
-        style.configure("Treeview", rowheight=30, font=("Segoe UI", 10), fieldbackground="#ffffff")
+        style.configure("Treeview", rowheight=32, font=("Segoe UI", 10), fieldbackground="#ffffff")
         style.configure("Treeview.Heading", font=("Segoe UI Semibold", 10))
         style.configure("TNotebook", background=bg, borderwidth=0)
         style.configure("TNotebook.Tab", padding=(14, 8), font=("Segoe UI Semibold", 10))
@@ -206,10 +237,13 @@ class NetworkMonitorApp(tk.Tk):
         notebook.grid(row=0, column=0, sticky="nsew")
 
         root = ttk.Frame(notebook, padding=12)
+        analytics_tab = ttk.Frame(notebook, padding=12)
         settings_tab = ttk.Frame(notebook, padding=12)
+        notebook.add(analytics_tab, text="Painel")
         notebook.add(root, text="Monitoramento")
         notebook.add(settings_tab, text="Configuracoes")
 
+        self._build_analytics_tab(analytics_tab)
         self._build_monitoring_tab(root)
         self._build_settings_tab(settings_tab)
 
@@ -220,7 +254,7 @@ class NetworkMonitorApp(tk.Tk):
         parent.rowconfigure(4, weight=1)
 
         header = ttk.Frame(parent, style="Panel.TFrame", padding=(16, 14))
-        header.grid(row=0, column=0, sticky="ew", pady=(0, 10))
+        header.grid(row=0, column=0, sticky="ew", pady=(0, 8))
         header.columnconfigure(0, weight=1)
         header.columnconfigure(1, weight=0)
 
@@ -359,6 +393,220 @@ class NetworkMonitorApp(tk.Tk):
                 sticky="w",
             )
 
+    def _build_analytics_tab(self, parent: ttk.Frame) -> None:
+        """Cria a aba com graficos de operacao."""
+
+        parent.columnconfigure(0, weight=1)
+        parent.rowconfigure(0, weight=0)
+        parent.rowconfigure(1, weight=0)
+        parent.rowconfigure(2, weight=0)
+        parent.rowconfigure(3, weight=1)
+
+        header = ttk.Frame(parent, style="Panel.TFrame", padding=(16, 14))
+        header.grid(row=0, column=0, sticky="ew", pady=(0, 10))
+        header.columnconfigure(0, weight=1)
+        header.columnconfigure(1, weight=0)
+        ttk.Label(header, text="Painel de Operacao", style="Title.TLabel").grid(row=0, column=0, sticky="w")
+        ttk.Label(
+            header,
+            text="Resumo visual do estado da rede e dos eventos recentes.",
+            style="Subtitle.TLabel",
+        ).grid(row=1, column=0, sticky="w", pady=(4, 0))
+
+        controls = ttk.Frame(parent)
+        controls.grid(row=1, column=0, sticky="ew", pady=(0, 8))
+        controls.columnconfigure(1, weight=1)
+        controls.columnconfigure(3, weight=1)
+
+        ttk.Label(controls, text="Grupo").grid(row=0, column=0, sticky="w", padx=(0, 8))
+        self.analytics_group_combo = ttk.Combobox(
+            controls,
+            textvariable=self.analytics_group_var,
+            state="readonly",
+            values=(GROUP_FILTER_ALL,),
+            width=24,
+        )
+        self.analytics_group_combo.grid(row=0, column=1, sticky="ew", padx=(0, 12))
+        self.analytics_group_combo.bind("<<ComboboxSelected>>", lambda _event: self._refresh_analytics())
+
+        ttk.Label(controls, text="Periodo").grid(row=0, column=2, sticky="w", padx=(0, 8))
+        self.analytics_range_combo = ttk.Combobox(
+            controls,
+            textvariable=self.analytics_range_var,
+            state="readonly",
+            values=("24h", "7d", "30d", "todos"),
+            width=10,
+        )
+        self.analytics_range_combo.grid(row=0, column=3, sticky="w")
+        self.analytics_range_combo.bind("<<ComboboxSelected>>", lambda _event: self._refresh_analytics())
+
+        ttk.Label(controls, text="Sem acumulo: os graficos usam eventos do painel atual e do historico recente.", style="Subtitle.TLabel").grid(
+            row=1,
+            column=0,
+            columnspan=4,
+            sticky="w",
+            pady=(8, 0),
+        )
+
+        summary = ttk.Frame(parent, style="Panel.TFrame")
+        summary.grid(row=2, column=0, sticky="ew", pady=(0, 8))
+        for column in range(4):
+            summary.columnconfigure(column, weight=1)
+        self._build_analytics_cards(summary)
+
+        content = ttk.Notebook(parent)
+        content.grid(row=3, column=0, sticky="nsew")
+
+        overview = ttk.Frame(content, padding=(0, 4))
+        details = ttk.Frame(content, padding=(0, 4))
+        indicators = ttk.Frame(content, padding=(0, 4))
+        content.add(overview, text="Visao geral")
+        content.add(details, text="Detalhes")
+        content.add(indicators, text="Indicadores")
+
+        overview.columnconfigure(0, weight=3)
+        overview.columnconfigure(1, weight=2)
+        overview.rowconfigure(0, weight=1)
+        overview.rowconfigure(1, weight=1)
+
+        self.status_chart = self._build_chart_panel(
+            overview,
+            row=0,
+            column=0,
+            title="Estado atual",
+            figsize=(7.0, 3.3),
+        )
+        self.group_chart = self._build_chart_panel(
+            overview,
+            row=0,
+            column=1,
+            title="Eventos por grupo",
+            figsize=(5.0, 3.3),
+        )
+
+        details.columnconfigure(0, weight=1)
+        details.rowconfigure(0, weight=1)
+        details.rowconfigure(1, weight=0)
+        self.hour_chart = self._build_chart_panel(
+            details,
+            row=0,
+            column=0,
+            title="Eventos por hora",
+            figsize=(12.0, 3.2),
+        )
+
+        events_frame = ttk.LabelFrame(details, text="Eventos filtrados", padding=10, style="Section.TLabelframe")
+        events_frame.grid(row=1, column=0, sticky="ew", pady=(8, 0))
+        events_frame.columnconfigure(0, weight=1)
+        self.analytics_events_tree = ttk.Treeview(
+            events_frame,
+            columns=("time", "group", "name", "event"),
+            show="headings",
+            height=6,
+        )
+        self.analytics_events_tree.heading("time", text="Hora")
+        self.analytics_events_tree.heading("group", text="Grupo")
+        self.analytics_events_tree.heading("name", text="Alvo")
+        self.analytics_events_tree.heading("event", text="Evento")
+        self.analytics_events_tree.column("time", width=88, minwidth=88, anchor="center", stretch=False)
+        self.analytics_events_tree.column("group", width=170, minwidth=150, anchor="w", stretch=False)
+        self.analytics_events_tree.column("name", width=220, minwidth=180, anchor="w", stretch=True)
+        self.analytics_events_tree.column("event", width=520, minwidth=260, anchor="w", stretch=True)
+        self.analytics_events_tree.grid(row=0, column=0, sticky="ew")
+
+        indicators.columnconfigure(0, weight=1)
+        indicators.columnconfigure(1, weight=1)
+        indicators.rowconfigure(0, weight=1)
+        indicators.rowconfigure(1, weight=0)
+
+        self.offline_chart = self._build_chart_panel(
+            indicators,
+            row=0,
+            column=0,
+            title="Tempo offline por grupo",
+            figsize=(6.2, 3.2),
+        )
+        self.event_type_chart = self._build_chart_panel(
+            indicators,
+            row=0,
+            column=1,
+            title="Tipos de evento",
+            figsize=(6.2, 3.2),
+        )
+
+        top_frame = ttk.LabelFrame(indicators, text="Top equipamentos no historico", padding=10, style="Section.TLabelframe")
+        top_frame.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(8, 0))
+        top_frame.columnconfigure(0, weight=1)
+        self.top_equipment_tree = ttk.Treeview(
+            top_frame,
+            columns=("name", "group", "events"),
+            show="headings",
+            height=6,
+        )
+        self.top_equipment_tree.heading("name", text="Alvo")
+        self.top_equipment_tree.heading("group", text="Grupo")
+        self.top_equipment_tree.heading("events", text="Ocorrencias")
+        self.top_equipment_tree.column("name", width=280, minwidth=200, anchor="w", stretch=True)
+        self.top_equipment_tree.column("group", width=220, minwidth=160, anchor="w", stretch=True)
+        self.top_equipment_tree.column("events", width=100, minwidth=100, anchor="center", stretch=False)
+        self.top_equipment_tree.grid(row=0, column=0, sticky="ew")
+
+    def _build_chart_panel(
+        self,
+        parent: ttk.Frame,
+        row: int,
+        column: int,
+        title: str,
+        figsize: tuple[float, float] = (4.2, 3.1),
+    ) -> dict[str, object]:
+        """Cria um painel grafico com figura do matplotlib."""
+
+        frame = ttk.LabelFrame(parent, text=title, padding=10, style="Section.TLabelframe")
+        frame.grid(
+            row=row,
+            column=column,
+            sticky="nsew",
+            padx=(0, 8) if column == 0 else (4, 0) if column == 1 else (0, 0),
+            pady=(0, 0),
+        )
+        frame.rowconfigure(0, weight=1)
+        frame.columnconfigure(0, weight=1)
+
+        figure = Figure(figsize=figsize, dpi=100)
+        figure.patch.set_facecolor("#ffffff")
+        axis = figure.add_subplot(111)
+        axis.set_facecolor("#ffffff")
+        canvas = FigureCanvasTkAgg(figure, master=frame)
+        widget = canvas.get_tk_widget()
+        widget.grid(row=0, column=0, sticky="nsew")
+        return {"frame": frame, "figure": figure, "axis": axis, "canvas": canvas}
+
+    def _build_analytics_cards(self, parent: ttk.Frame) -> None:
+        """Monta cards-resumo da aba de painel."""
+
+        cards = (
+            ("Eventos", self.analytics_total_events_var),
+            ("Filtrados", self.analytics_group_events_var),
+            ("Grupo topo", self.analytics_top_group_var),
+            ("Ultimo evento", self.analytics_last_event_var),
+        )
+        for column, (title, variable) in enumerate(cards):
+            parent.columnconfigure(column, weight=1, uniform="analytics_cards")
+            card = ttk.Frame(parent, style="Card.TFrame", padding=(12, 10))
+            card.grid(row=0, column=column, sticky="nsew", padx=(0, 8), pady=(0, 0))
+            card.rowconfigure(0, weight=0)
+            card.rowconfigure(1, weight=1)
+            ttk.Label(card, text=title, style="CardTitle.TLabel").grid(row=0, column=0, sticky="w")
+            card.columnconfigure(0, weight=1)
+            wrap = 260 if title == "Ultimo evento" else 190
+            ttk.Label(
+                card,
+                textvariable=variable,
+                style="CardValue.TLabel",
+                wraplength=wrap,
+                justify="left",
+            ).grid(row=1, column=0, sticky="w", pady=(2, 0))
+
     def _build_group_summary(self, parent: ttk.Frame) -> None:
         """Cria o resumo por grupo."""
 
@@ -388,19 +636,19 @@ class NetworkMonitorApp(tk.Tk):
             "waiting": "Ag.",
         }
         widths = {
-            "group": 140,
-            "total": 54,
-            "online": 48,
-            "offline": 48,
-            "flapping": 48,
-            "waiting": 48,
+            "group": 170,
+            "total": 64,
+            "online": 58,
+            "offline": 58,
+            "flapping": 58,
+            "waiting": 58,
         }
         for column in columns:
             self.group_summary_tree.heading(column, text=headings[column])
             self.group_summary_tree.column(
                 column,
                 width=widths[column],
-                minwidth=40,
+                minwidth=48,
                 anchor="center" if column != "group" else "w",
                 stretch=column == "group",
             )
@@ -440,15 +688,15 @@ class NetworkMonitorApp(tk.Tk):
             "error": "Mensagem",
         }
         widths = {
-            "group": 130,
-            "name": 170,
-            "ip": 210,
-            "status": 105,
-            "latency": 90,
-            "checked_at": 110,
-            "offline_for": 110,
-            "last_event": 190,
-            "error": 240,
+            "group": 160,
+            "name": 190,
+            "ip": 190,
+            "status": 110,
+            "latency": 88,
+            "checked_at": 112,
+            "offline_for": 112,
+            "last_event": 180,
+            "error": 260,
         }
         for column in columns:
             self.tree.heading(column, text=headings[column])
@@ -459,6 +707,7 @@ class NetworkMonitorApp(tk.Tk):
                 anchor="center"
                 if column in {"status", "latency", "checked_at", "offline_for"}
                 else "w",
+                stretch=column in {"group", "name", "ip", "last_event", "error"},
             )
 
         self.tree.tag_configure("online", foreground="#137333")
@@ -500,10 +749,10 @@ class NetworkMonitorApp(tk.Tk):
         self.events_tree.heading("equipment", text="Alvo")
         self.events_tree.heading("event", text="Evento")
         self.events_tree.heading("group", text="Grupo")
-        self.events_tree.column("time", width=90, minwidth=80, anchor="center")
-        self.events_tree.column("equipment", width=190, minwidth=120)
-        self.events_tree.column("event", width=520, minwidth=220)
-        self.events_tree.column("group", width=150, minwidth=100)
+        self.events_tree.column("time", width=88, minwidth=88, anchor="center", stretch=False)
+        self.events_tree.column("equipment", width=210, minwidth=170, anchor="w", stretch=True)
+        self.events_tree.column("event", width=520, minwidth=260, anchor="w", stretch=True)
+        self.events_tree.column("group", width=160, minwidth=140, anchor="w", stretch=False)
         self.events_tree.grid(row=0, column=0, sticky="ew")
 
     def _build_monitoring_actions(self, parent: ttk.Frame) -> None:
@@ -853,8 +1102,19 @@ class NetworkMonitorApp(tk.Tk):
             pady=(8, 0),
         )
 
+        weekday_frame = ttk.Frame(frame)
+        weekday_frame.grid(row=2, column=0, columnspan=7, sticky="ew", pady=(8, 0))
+        ttk.Label(weekday_frame, text="Dias da semana").grid(row=0, column=0, sticky="w", padx=(0, 10))
+        for index, (label, weekday) in enumerate(WEEKDAY_OPTIONS, start=1):
+            ttk.Checkbutton(
+                weekday_frame,
+                text=label,
+                variable=self.group_alert_weekday_vars[weekday],
+                command=self._update_group_alert_weekday_status,
+            ).grid(row=0, column=index, sticky="w", padx=(0, 8))
+
         ttk.Label(frame, textvariable=self.group_alert_status_var, style="Summary.TLabel").grid(
-            row=2,
+            row=3,
             column=0,
             columnspan=7,
             sticky="w",
@@ -871,10 +1131,10 @@ class NetworkMonitorApp(tk.Tk):
         )
         self.group_alert_tree.heading("group", text="Grupo")
         self.group_alert_tree.heading("intervals", text="Intervalos")
-        self.group_alert_tree.heading("window", text="Horario")
-        self.group_alert_tree.column("group", width=180, minwidth=120)
-        self.group_alert_tree.column("intervals", width=260, minwidth=160)
-        self.group_alert_tree.column("window", width=160, minwidth=120)
+        self.group_alert_tree.heading("window", text="Horario / dias")
+        self.group_alert_tree.column("group", width=200, minwidth=160, anchor="w", stretch=True)
+        self.group_alert_tree.column("intervals", width=280, minwidth=200, anchor="w", stretch=True)
+        self.group_alert_tree.column("window", width=170, minwidth=150, anchor="center", stretch=False)
         self.group_alert_tree.grid(row=3, column=0, columnspan=7, sticky="ew")
         self.group_alert_tree.bind("<<TreeviewSelect>>", self._select_group_alert_rule)
         self._refresh_group_alert_options()
@@ -980,17 +1240,28 @@ class NetworkMonitorApp(tk.Tk):
             messagebox.showwarning("Regra invalida", str(exc))
             return
 
+        weekdays = self._selected_group_weekdays()
+        if weekdays is None:
+            messagebox.showwarning(
+                "Regra invalida",
+                "Selecione pelo menos um dia da semana para este grupo.",
+            )
+            return
+
         group_thresholds = dict(self._notification_settings.group_thresholds_seconds)
         group_thresholds[group] = thresholds
         group_windows = dict(self._notification_settings.group_notification_windows)
+        group_weekdays = dict(self._notification_settings.group_notification_weekdays)
         if notification_window is None:
             group_windows.pop(group, None)
         else:
             group_windows[group] = notification_window
+        group_weekdays[group] = weekdays
 
         settings = self._copy_notification_settings(
             group_thresholds_seconds=group_thresholds,
             group_notification_windows=group_windows,
+            group_notification_weekdays=group_weekdays,
         )
         if not self._persist_notification_settings(settings):
             return
@@ -1006,6 +1277,7 @@ class NetworkMonitorApp(tk.Tk):
         group = self._normalize_group(self.group_alert_group_var.get())
         group_thresholds = dict(self._notification_settings.group_thresholds_seconds)
         group_windows = dict(self._notification_settings.group_notification_windows)
+        group_weekdays = dict(self._notification_settings.group_notification_weekdays)
         if group not in group_thresholds and group not in group_windows:
             self.group_alert_status_var.set(f"O grupo {group} ja usa as regras globais.")
             self._load_group_alert_selection()
@@ -1013,9 +1285,11 @@ class NetworkMonitorApp(tk.Tk):
 
         group_thresholds.pop(group, None)
         group_windows.pop(group, None)
+        group_weekdays.pop(group, None)
         settings = self._copy_notification_settings(
             group_thresholds_seconds=group_thresholds,
             group_notification_windows=group_windows,
+            group_notification_weekdays=group_weekdays,
         )
         if not self._persist_notification_settings(settings):
             return
@@ -1028,6 +1302,7 @@ class NetworkMonitorApp(tk.Tk):
         self,
         group_thresholds_seconds: dict[str, tuple[int, ...]] | None = None,
         group_notification_windows: dict[str, tuple[str, str]] | None = None,
+        group_notification_weekdays: dict[str, tuple[int, ...]] | None = None,
     ) -> NotificationSettings:
         """Cria uma copia das configuracoes atuais com grupos atualizados."""
 
@@ -1045,6 +1320,11 @@ class NetworkMonitorApp(tk.Tk):
                 group_notification_windows
                 if group_notification_windows is not None
                 else self._notification_settings.group_notification_windows
+            ),
+            group_notification_weekdays=(
+                group_notification_weekdays
+                if group_notification_weekdays is not None
+                else self._notification_settings.group_notification_weekdays
             ),
             offline_failure_threshold=self._notification_settings.offline_failure_threshold,
             flapping_transition_count=self._notification_settings.flapping_transition_count,
@@ -1074,6 +1354,7 @@ class NetworkMonitorApp(tk.Tk):
             self._notification_settings.thresholds_seconds,
         )
         notification_window = self._notification_settings.group_notification_windows.get(group)
+        weekdays = self._notification_settings.group_notification_weekdays.get(group)
         self.group_alert_intervals_var.set(format_thresholds_text(thresholds))
         if notification_window is None:
             self.group_alert_window_start_var.set("")
@@ -1081,6 +1362,8 @@ class NetworkMonitorApp(tk.Tk):
         else:
             self.group_alert_window_start_var.set(notification_window[0])
             self.group_alert_window_end_var.set(notification_window[1])
+        self._set_group_alert_weekdays(weekdays)
+        self._update_group_alert_weekday_status()
 
     def _select_group_alert_rule(self, _event: tk.Event) -> None:
         """Seleciona uma regra de grupo a partir da tabela."""
@@ -1148,6 +1431,7 @@ class NetworkMonitorApp(tk.Tk):
 
         groups = set(self._notification_settings.group_thresholds_seconds)
         groups.update(self._notification_settings.group_notification_windows)
+        groups.update(self._notification_settings.group_notification_weekdays)
         for group in sorted(groups):
             thresholds = self._notification_settings.group_thresholds_seconds.get(group)
             intervals_text = (
@@ -1156,13 +1440,14 @@ class NetworkMonitorApp(tk.Tk):
                 else f"Global ({format_thresholds_text(self._notification_settings.thresholds_seconds)})"
             )
             notification_window = self._notification_settings.group_notification_windows.get(group)
+            weekdays = self._notification_settings.group_notification_weekdays.get(group)
             self.group_alert_tree.insert(
                 "",
                 "end",
                 values=(
                     group,
                     intervals_text,
-                    self._format_notification_window(notification_window),
+                    self._format_notification_window(notification_window, weekdays),
                 ),
             )
 
@@ -1182,14 +1467,55 @@ class NetworkMonitorApp(tk.Tk):
             self._normalize_time_text(end_text, "Ate"),
         )
 
+    def _set_group_alert_weekdays(self, weekdays: tuple[int, ...] | None) -> None:
+        """Marca os dias da semana carregados para o grupo selecionado."""
+
+        selected = set(weekdays) if weekdays is not None else {weekday for _label, weekday in WEEKDAY_OPTIONS}
+        for _label, weekday in WEEKDAY_OPTIONS:
+            self.group_alert_weekday_vars[weekday].set(weekday in selected)
+
+    def _selected_group_weekdays(self) -> tuple[int, ...] | None:
+        """Retorna os dias marcados no formulario do grupo."""
+
+        selected = tuple(
+            weekday for _label, weekday in WEEKDAY_OPTIONS if self.group_alert_weekday_vars[weekday].get()
+        )
+        return selected if selected else None
+
+    def _update_group_alert_weekday_status(self) -> None:
+        """Atualiza o texto informativo conforme os dias selecionados."""
+
+        selected = self._selected_group_weekdays()
+        if selected is None:
+            self.group_alert_status_var.set("Selecione pelo menos um dia da semana para o grupo.")
+            return
+
+        labels = ", ".join(WEEKDAY_LABELS[weekday][:3] for weekday in selected)
+        self.group_alert_status_var.set(f"Dias ativos: {labels}.")
+
     @staticmethod
-    def _format_notification_window(window: tuple[str, str] | None) -> str:
+    def _format_notification_window(
+        window: tuple[str, str] | None,
+        weekdays: tuple[int, ...] | None = None,
+    ) -> str:
         """Formata a janela de notificacao para a tabela."""
 
-        if window is None:
-            return "24h"
+        if window is None and weekdays is None:
+            return "24h / todos os dias"
 
-        return f"{window[0]} ate {window[1]}"
+        parts: list[str] = []
+        if window is None:
+            parts.append("24h")
+        else:
+            parts.append(f"{window[0]} ate {window[1]}")
+
+        if weekdays is None:
+            parts.append("todos os dias")
+        else:
+            labels = ", ".join(WEEKDAY_LABELS[weekday][:3] for weekday in weekdays)
+            parts.append(labels)
+
+        return " / ".join(parts)
 
     @staticmethod
     def _normalize_time_text(value: str, field_name: str) -> str:
@@ -1435,6 +1761,15 @@ class NetworkMonitorApp(tk.Tk):
         self._refresh_live_rows()
         self.after(200, self._schedule_queue_processing)
 
+    def _schedule_analytics_refresh(self) -> None:
+        """Atualiza o painel analitico em um ritmo mais leve."""
+
+        if self._analytics_dirty:
+            self._refresh_analytics()
+            self._analytics_dirty = False
+
+        self.after(10000, self._schedule_analytics_refresh)
+
     def _process_result_queue(self) -> None:
         """Aplica na tabela todos os resultados pendentes."""
 
@@ -1521,8 +1856,6 @@ class NetworkMonitorApp(tk.Tk):
 
         self._update_display_status(result.ip_address)
         self._render_equipment_row(result.ip_address)
-        self._refresh_dashboard()
-        self._refresh_group_summary()
         self._apply_filters()
         self._update_summary()
 
@@ -1668,6 +2001,313 @@ class NetworkMonitorApp(tk.Tk):
         self.dashboard_vars["waiting"].set(str(counts[STATUS_WAITING]))
         self.dashboard_vars["maintenance"].set(str(counts[STATUS_MAINTENANCE]))
 
+    def _refresh_analytics(self) -> None:
+        """Atualiza os graficos da aba de painel."""
+
+        events = self._filtered_analytics_events()
+        signature = self._analytics_signature(events)
+        if signature == self._analytics_last_signature:
+            return
+
+        self._analytics_last_signature = signature
+        self.analytics_total_events_var.set(str(len(self._event_history)))
+        self.analytics_group_events_var.set(str(len(events)))
+        self.analytics_last_event_var.set(self._format_last_event_summary(events))
+        self.analytics_top_group_var.set(self._top_group_label(events))
+        if hasattr(self, "status_chart"):
+            counts = self._count_statuses(list(self._monitors))
+            self._draw_status_chart(self.status_chart, counts)
+        if hasattr(self, "group_chart"):
+            self._draw_group_chart(self.group_chart, events)
+        if hasattr(self, "hour_chart"):
+            self._draw_hour_chart(self.hour_chart, events)
+        if hasattr(self, "analytics_events_tree"):
+            self._refresh_analytics_events_tree(events)
+        if hasattr(self, "offline_chart"):
+            self._draw_offline_chart(self.offline_chart, events)
+        if hasattr(self, "event_type_chart"):
+            self._draw_event_type_chart(self.event_type_chart, events)
+        if hasattr(self, "top_equipment_tree"):
+            self._refresh_top_equipment_tree(events)
+        self._analytics_dirty = False
+
+    def _analytics_signature(self, events: list[tuple[datetime, str, str, str]]) -> tuple:
+        """Cria uma assinatura leve do estado analitico atual."""
+
+        history = self._event_history
+        return (
+            self.analytics_group_var.get().strip().lower(),
+            self.analytics_range_var.get().strip().lower(),
+            len(history),
+            history[0] if history else None,
+            history[-1] if history else None,
+            len(events),
+            events[0] if events else None,
+            events[-1] if events else None,
+        )
+
+    def _filtered_analytics_events(self) -> list[tuple[datetime, str, str, str]]:
+        """Filtra o historico recente por grupo e periodo."""
+
+        now = datetime.now()
+        range_name = self.analytics_range_var.get().strip().lower()
+        cutoff: datetime | None
+        if range_name == "7d":
+            cutoff = now - timedelta(days=7)
+        elif range_name == "30d":
+            cutoff = now - timedelta(days=30)
+        elif range_name == "24h":
+            cutoff = now - timedelta(days=1)
+        else:
+            cutoff = None
+
+        selected_group = self.analytics_group_var.get().strip()
+        events: list[tuple[datetime, str, str, str]] = []
+        for event in self._event_history:
+            happened_at, _name, _event, group = event
+            if selected_group != GROUP_FILTER_ALL and group != selected_group:
+                continue
+            if cutoff is not None and happened_at < cutoff:
+                continue
+            events.append(event)
+
+        return events
+
+    def _format_last_event_summary(self, events: list[tuple[datetime, str, str, str]]) -> str:
+        """Resume o evento mais recente filtrado."""
+
+        if not events:
+            return "Sem eventos no filtro"
+
+        happened_at, name, event, group = events[0]
+        return f"{happened_at:%H:%M} | {group} | {name} | {event}"
+
+    def _top_group_label(self, events: list[tuple[datetime, str, str, str]]) -> str:
+        """Retorna o grupo com mais eventos no filtro."""
+
+        if not events:
+            return "-"
+
+        counts: dict[str, int] = {}
+        for _happened_at, _name, _event, group in events:
+            counts[group] = counts.get(group, 0) + 1
+
+        top_group, total = max(counts.items(), key=lambda item: item[1])
+        return f"{top_group} ({total})"
+
+    def _refresh_analytics_events_tree(
+        self,
+        events: list[tuple[datetime, str, str, str]],
+    ) -> None:
+        """Atualiza a lista de eventos filtrados."""
+
+        for item_id in self.analytics_events_tree.get_children():
+            self.analytics_events_tree.delete(item_id)
+
+        for happened_at, name, event, group in events[:15]:
+            self.analytics_events_tree.insert(
+                "",
+                "end",
+                values=(happened_at.strftime("%H:%M:%S"), group, name, event),
+            )
+
+    def _draw_offline_chart(
+        self,
+        chart: dict[str, object],
+        events: list[tuple[datetime, str, str, str]],
+    ) -> None:
+        """Desenha o tempo offline acumulado por grupo."""
+
+        axis = chart["axis"]
+        canvas = chart["canvas"]
+        axis.clear()
+
+        totals: dict[str, float] = {}
+        now = datetime.now()
+        for ip_address, state in self._runtime_by_ip.items():
+            monitor_group = self._group_by_ip.get(ip_address, DEFAULT_EQUIPMENT_GROUP)
+            if state.confirmed_status is False and state.offline_since is not None:
+                totals[monitor_group] = totals.get(monitor_group, 0.0) + max(
+                    0.0, (now - state.offline_since).total_seconds() / 60.0
+                )
+
+        items = sorted(totals.items(), key=lambda item: item[1], reverse=True)[:8]
+        if not items:
+            items = [("Sem offline", 0.0)]
+
+        labels = [group if len(group) <= 18 else f"{group[:15]}..." for group, _ in items]
+        values = [value for _group, value in items]
+        colors = sns.color_palette("rocket", len(items))
+        axis.barh(labels[::-1], values[::-1], color=colors[::-1], edgecolor="#102033", linewidth=0.3)
+        axis.set_title("Tempo offline por grupo", loc="left", fontsize=12, fontweight="bold", color="#102033", pad=10)
+        axis.set_xlabel("Minutos offline", fontsize=9, labelpad=8)
+        axis.grid(axis="x", linestyle="--", alpha=0.18)
+        axis.spines["top"].set_visible(False)
+        axis.spines["right"].set_visible(False)
+        axis.spines["left"].set_color("#d1d5db")
+        axis.spines["bottom"].set_color("#d1d5db")
+        axis.tick_params(axis="x", labelsize=9)
+        axis.tick_params(axis="y", labelsize=9)
+        canvas.draw_idle()
+
+    def _draw_event_type_chart(
+        self,
+        chart: dict[str, object],
+        events: list[tuple[datetime, str, str, str]],
+    ) -> None:
+        """Desenha a distribuicao de tipos de evento."""
+
+        axis = chart["axis"]
+        canvas = chart["canvas"]
+        axis.clear()
+
+        counts: dict[str, int] = {}
+        for _happened_at, _name, event, _group in events:
+            event_name = event.split(" as ", 1)[0].strip()
+            counts[event_name] = counts.get(event_name, 0) + 1
+
+        items = sorted(counts.items(), key=lambda item: item[1], reverse=True)[:8]
+        if not items:
+            items = [("Sem eventos", 0)]
+
+        labels = [label if len(label) <= 18 else f"{label[:15]}..." for label, _ in items]
+        values = [value for _label, value in items]
+        if sum(values) <= 0:
+            axis.text(0.5, 0.5, "Sem dados para este filtro", ha="center", va="center", fontsize=10, color="#6b7280", transform=axis.transAxes)
+            axis.set_title("Tipos de evento", loc="left", fontsize=12, fontweight="bold", color="#102033", pad=10)
+            axis.axis("off")
+            canvas.draw_idle()
+            return
+        colors = sns.color_palette("viridis", len(items))
+        axis.pie(
+            values,
+            labels=labels,
+            autopct=lambda pct: f"{pct:.0f}%" if pct >= 8 else "",
+            startangle=90,
+            colors=colors,
+            textprops={"fontsize": 8, "color": "#102033"},
+        )
+        axis.set_title("Tipos de evento", loc="left", fontsize=12, fontweight="bold", color="#102033", pad=10)
+        axis.axis("equal")
+        canvas.draw_idle()
+
+    def _refresh_top_equipment_tree(
+        self,
+        events: list[tuple[datetime, str, str, str]],
+    ) -> None:
+        """Atualiza a lista dos equipamentos mais recorrentes no historico."""
+
+        for item_id in self.top_equipment_tree.get_children():
+            self.top_equipment_tree.delete(item_id)
+
+        counts: dict[tuple[str, str], int] = {}
+        for _happened_at, name, _event, group in events:
+            key = (name, group)
+            counts[key] = counts.get(key, 0) + 1
+
+        for (name, group), total in sorted(counts.items(), key=lambda item: item[1], reverse=True)[:10]:
+            self.top_equipment_tree.insert("", "end", values=(name, group, total))
+
+    def _draw_status_chart(self, chart: dict[str, object], counts: dict[str, int]) -> None:
+        """Desenha um grafico de barras com o estado atual."""
+
+        axis = chart["axis"]
+        canvas = chart["canvas"]
+        axis.clear()
+
+        labels = ["Online", "Offline", "Instavel", "Oscilando", "Manutencao", "Aguardando"]
+        values = [
+            counts[STATUS_ONLINE],
+            counts[STATUS_OFFLINE],
+            counts[STATUS_UNSTABLE],
+            counts[STATUS_FLAPPING],
+            counts[STATUS_MAINTENANCE],
+            counts[STATUS_WAITING],
+        ]
+        colors = ["#137333", "#b3261e", "#b45309", "#8a4b00", "#596579", "#5f6368"]
+        bars = axis.bar(labels, values, color=colors, edgecolor="#102033", linewidth=0.3)
+        axis.set_title("Estado atual", loc="left", fontsize=12, fontweight="bold", color="#102033", pad=10)
+        axis.set_ylabel("Alvos", fontsize=9, labelpad=8)
+        axis.grid(axis="y", linestyle="--", alpha=0.18)
+        axis.spines["top"].set_visible(False)
+        axis.spines["right"].set_visible(False)
+        axis.spines["left"].set_color("#d1d5db")
+        axis.spines["bottom"].set_color("#d1d5db")
+        axis.tick_params(axis="x", labelrotation=15, labelsize=9, pad=2)
+        axis.tick_params(axis="y", labelsize=9)
+        axis.set_ylim(0, max(values + [1]) * 1.2)
+        for bar, value in zip(bars, values):
+            axis.text(
+                bar.get_x() + bar.get_width() / 2,
+                bar.get_height() + 0.05,
+                str(value),
+                ha="center",
+                va="bottom",
+                fontsize=9,
+                color="#102033",
+            )
+        canvas.draw_idle()
+
+    def _draw_group_chart(self, chart: dict[str, object], events: list[tuple[datetime, str, str, str]]) -> None:
+        """Desenha um ranking dos grupos com mais eventos recentes."""
+
+        axis = chart["axis"]
+        canvas = chart["canvas"]
+        axis.clear()
+
+        group_counts: dict[str, int] = {}
+        for _happened_at, _name, _event, group in events:
+            group_counts[group] = group_counts.get(group, 0) + 1
+
+        items = sorted(group_counts.items(), key=lambda item: item[1], reverse=True)[:8]
+        if not items:
+            items = [("Sem eventos", 0)]
+
+        labels = [group if len(group) <= 18 else f"{group[:15]}..." for group, _count in items]
+        values = [count for _group, count in items]
+        colors = sns.color_palette("Blues", len(items))
+        axis.barh(labels[::-1], values[::-1], color=colors[::-1], edgecolor="#102033", linewidth=0.3)
+        axis.set_title("Eventos por grupo", loc="left", fontsize=12, fontweight="bold", color="#102033", pad=10)
+        axis.set_xlabel("Eventos", fontsize=9, labelpad=8)
+        axis.grid(axis="x", linestyle="--", alpha=0.18)
+        axis.spines["top"].set_visible(False)
+        axis.spines["right"].set_visible(False)
+        axis.spines["left"].set_color("#d1d5db")
+        axis.spines["bottom"].set_color("#d1d5db")
+        axis.tick_params(axis="x", labelsize=9)
+        axis.tick_params(axis="y", labelsize=9)
+        canvas.draw_idle()
+
+    def _draw_hour_chart(self, chart: dict[str, object], events: list[tuple[datetime, str, str, str]]) -> None:
+        """Desenha um grafico simples por faixa horaria."""
+
+        axis = chart["axis"]
+        canvas = chart["canvas"]
+        axis.clear()
+
+        hour_counts = [0] * 24
+        for happened_at, _name, _event, _group in events:
+            hour_counts[happened_at.hour] += 1
+
+        bucket_labels = []
+        bucket_values = []
+        for start_hour in range(0, 24, 2):
+            bucket_labels.append(f"{start_hour:02d}-{start_hour + 1:02d}")
+            bucket_values.append(hour_counts[start_hour] + hour_counts[start_hour + 1])
+
+        colors = sns.color_palette("crest", len(bucket_values))
+        axis.bar(bucket_labels, bucket_values, color=colors, edgecolor="#102033", linewidth=0.3)
+        axis.set_title("Eventos por hora", loc="left", fontsize=12, fontweight="bold", color="#102033", pad=10)
+        axis.set_ylabel("Eventos", fontsize=9, labelpad=8)
+        axis.grid(axis="y", linestyle="--", alpha=0.18)
+        axis.tick_params(axis="x", labelrotation=0, labelsize=8, pad=2)
+        axis.tick_params(axis="y", labelsize=9)
+        axis.spines["top"].set_visible(False)
+        axis.spines["right"].set_visible(False)
+        axis.spines["left"].set_color("#d1d5db")
+        axis.spines["bottom"].set_color("#d1d5db")
+        canvas.draw_idle()
+
     def _refresh_group_summary(self) -> None:
         """Recalcula a tabela de grupos."""
 
@@ -1727,7 +2367,8 @@ class NetworkMonitorApp(tk.Tk):
             return
 
         self._event_history.insert(0, (happened_at, monitor.name, event, monitor.group))
-        del self._event_history[50:]
+        del self._event_history[ANALYTICS_HISTORY_LIMIT:]
+        self._analytics_dirty = True
         self._refresh_event_history()
 
     def _refresh_event_history(self) -> None:
@@ -1996,6 +2637,11 @@ class NetworkMonitorApp(tk.Tk):
         self.group_entry.configure(values=tuple(ordered_groups))
         if hasattr(self, "maintenance_group_combo"):
             self.maintenance_group_combo.configure(values=tuple(ordered_groups))
+        if hasattr(self, "analytics_group_combo"):
+            analytics_groups = (GROUP_FILTER_ALL, *ordered_groups)
+            self.analytics_group_combo.configure(values=analytics_groups)
+            if self.analytics_group_var.get() not in analytics_groups:
+                self.analytics_group_var.set(GROUP_FILTER_ALL)
 
         if self.maintenance_group_var.get() not in ordered_groups:
             self.maintenance_group_var.set(ordered_groups[0])

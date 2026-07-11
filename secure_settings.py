@@ -38,6 +38,7 @@ class NotificationSettings:
     thresholds_seconds: tuple[int, ...] = DEFAULT_NOTIFICATION_THRESHOLDS_SECONDS
     group_thresholds_seconds: dict[str, tuple[int, ...]] = field(default_factory=dict)
     group_notification_windows: dict[str, tuple[str, str]] = field(default_factory=dict)
+    group_notification_weekdays: dict[str, tuple[int, ...]] = field(default_factory=dict)
     offline_failure_threshold: int = DEFAULT_OFFLINE_FAILURE_THRESHOLD
     flapping_transition_count: int = DEFAULT_FLAPPING_TRANSITION_COUNT
     flapping_window_minutes: int = DEFAULT_FLAPPING_WINDOW_MINUTES
@@ -83,6 +84,7 @@ class SecureSettingsStore:
             thresholds_seconds=_thresholds_from_payload(payload),
             group_thresholds_seconds=_group_thresholds_from_payload(payload),
             group_notification_windows=_group_notification_windows_from_payload(payload),
+            group_notification_weekdays=_group_notification_weekdays_from_payload(payload),
             offline_failure_threshold=_positive_int_from_payload(
                 payload,
                 "offline_failure_threshold",
@@ -116,6 +118,11 @@ class SecureSettingsStore:
             "group_notification_windows": _serializable_group_notification_windows(
                 settings.group_notification_windows
             ),
+            "group_notification_weekdays": {
+                group: list(_normalize_weekdays(weekdays))
+                for group, weekdays in settings.group_notification_weekdays.items()
+                if group.strip()
+            },
             "offline_failure_threshold": int(settings.offline_failure_threshold),
             "flapping_transition_count": int(settings.flapping_transition_count),
             "flapping_window_minutes": int(settings.flapping_window_minutes),
@@ -327,6 +334,27 @@ def _group_notification_windows_from_payload(payload: dict[str, object]) -> dict
     return windows
 
 
+def _group_notification_weekdays_from_payload(payload: dict[str, object]) -> dict[str, tuple[int, ...]]:
+    """Carrega os dias da semana por grupo."""
+
+    raw_groups = payload.get("group_notification_weekdays")
+    if not isinstance(raw_groups, dict):
+        return {}
+
+    weekdays: dict[str, tuple[int, ...]] = {}
+    for raw_group, raw_days in raw_groups.items():
+        group = str(raw_group).strip()
+        if not group or not isinstance(raw_days, list):
+            continue
+
+        try:
+            weekdays[group] = _normalize_weekdays(int(value) for value in raw_days)
+        except (TypeError, ValueError):
+            continue
+
+    return weekdays
+
+
 def _serializable_group_notification_windows(
     windows: dict[str, tuple[str, str]],
 ) -> dict[str, dict[str, str]]:
@@ -365,6 +393,13 @@ def _normalize_time_text(value: str) -> str | None:
         return None
 
     return f"{hour:02d}:{minute:02d}"
+
+
+def _normalize_weekdays(values: Iterable[int]) -> tuple[int, ...]:
+    """Retorna dias da semana unicos e ordenados, de 0=segunda a 6=domingo."""
+
+    normalized = sorted({int(value) for value in values if 0 <= int(value) <= 6})
+    return tuple(normalized)
 
 
 def _positive_int_from_payload(

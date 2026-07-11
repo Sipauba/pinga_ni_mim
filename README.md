@@ -41,6 +41,9 @@ pasta fixa e criar apenas um atalho para ele na area de trabalho.
 - Edicao de alvos ja cadastrados pela propria tela.
 - Intervalo de monitoramento configuravel por alvo.
 - Dashboard com cards de total, online, offline, instavel, oscilando, aguardando e manutencao.
+- Aba `Painel` com visao geral, detalhes e indicadores operacionais.
+- O painel usa apenas os 1000 eventos mais recentes para montar os graficos.
+- A atualizacao do painel analitico e mais leve e roda em ritmo reduzido.
 - Resumo por grupo e filtros por grupo, status e busca por nome/endereco/grupo.
 - Tabela com status, latencia, horario da ultima leitura, tempo offline e ultimo evento.
 - Historico rapido de eventos recentes na tela principal.
@@ -49,7 +52,9 @@ pasta fixa e criar apenas um atalho para ele na area de trabalho.
 - Janela de manutencao para silenciar alertas temporariamente por alvo, grupo ou todos,
   sem envio acumulado ao encerrar.
 - Notificacao via WhatsApp em intervalos de queda definidos pelo usuario.
-- Intervalos e horarios de notificacao especificos por grupo, com regra global 24h como padrao.
+- Intervalos, horarios e dias da semana de notificacao especificos por grupo, com regra global 24h como padrao.
+- Graficos de estado atual, eventos por grupo, eventos por hora, tempo offline por grupo,
+  tipos de evento e top equipamentos no historico.
 - Notificacao via WhatsApp quando a conexao e reestabelecida apos uma queda alertada.
 - Aba de configuracoes para informar endpoint, destinatario e chave da Evolution API.
 - Fila de envio de notificacoes para processar alertas simultaneos sem disputar a API.
@@ -152,12 +157,38 @@ O motor de monitoramento usa por padrao 3 falhas seguidas para confirmar
 offline e marca oscilacao quando ha 4 mudancas de estado dentro de 10 minutos.
 
 Na secao `Alertas por grupo`, escolha um grupo, informe os intervalos e, se
-necessario, preencha `Notificar de` e `Ate` no formato `HH:MM`. Quando esses
-dois campos ficam em branco, o grupo notifica 24h.
+necessario, preencha `Notificar de` e `Ate` no formato `HH:MM`. Tambem marque
+os dias da semana em que esse grupo pode notificar. Quando esses dois campos
+ficam em branco, o grupo notifica 24h.
 
 Fora do horario configurado, o alvo continua sendo monitorado, mas nao envia
 WhatsApp e a queda nao fica acumulada para disparar depois. Para voltar a usar
 o intervalo global e notificacao 24h, selecione o grupo e clique em `Usar global`.
+
+## Painel
+
+A aba `Painel` organiza a leitura operacional em tres partes:
+
+- `Visao geral`: estado atual e eventos por grupo.
+- `Detalhes`: eventos por hora e lista filtrada de eventos recentes.
+- `Indicadores`: tempo offline por grupo, tipos de evento e top equipamentos no historico.
+
+Os filtros da aba permitem escolher grupo e periodo (`24h`, `7d`, `30d` ou `todos`).
+Os cards do topo mostram o total de eventos, os eventos filtrados, o grupo com mais
+ocorrencias e o ultimo evento do filtro atual.
+
+Para manter o desempenho, os graficos analiticos usam somente o historico mais
+recente e nao redesenham tudo quando o estado filtrado nao mudou de fato.
+
+## Capturas de tela
+
+### Monitoramento
+
+![Tela de monitoramento](docs/screenshot-monitoramento.png)
+
+### Painel
+
+![Painel de operacao](docs/screenshot-painel.png)
 
 Ao clicar em `Salvar configuracoes`, o programa cria o arquivo local:
 

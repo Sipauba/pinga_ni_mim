@@ -55,6 +55,9 @@ class OutageNotifier:
         self.group_notification_windows = self._normalize_group_notification_windows(
             self.settings.group_notification_windows
         )
+        self.group_notification_weekdays = self._normalize_group_notification_weekdays(
+            self.settings.group_notification_weekdays
+        )
         self._outages_by_ip: dict[str, OutageState] = {}
         self._suppressed_since_by_ip: dict[str, datetime] = {}
 
@@ -67,6 +70,7 @@ class OutageNotifier:
         self.update_thresholds(settings.thresholds_seconds)
         self.update_group_thresholds(settings.group_thresholds_seconds)
         self.update_group_notification_windows(settings.group_notification_windows)
+        self.update_group_notification_weekdays(settings.group_notification_weekdays)
 
     def update_thresholds(self, thresholds_seconds: tuple[int, ...]) -> None:
         """Atualiza os intervalos usados nos proximos alertas."""
@@ -86,6 +90,16 @@ class OutageNotifier:
 
         self.group_notification_windows = self._normalize_group_notification_windows(
             group_notification_windows
+        )
+
+    def update_group_notification_weekdays(
+        self,
+        group_notification_weekdays: dict[str, tuple[int, ...]],
+    ) -> None:
+        """Atualiza os dias da semana em que cada grupo pode notificar."""
+
+        self.group_notification_weekdays = self._normalize_group_notification_weekdays(
+            group_notification_weekdays
         )
 
     def handle_ping_result(self, result: PingResult) -> None:
@@ -172,17 +186,25 @@ class OutageNotifier:
 
         window = self.group_notification_windows.get(group.strip())
         if window is None:
-            return True
+            weekdays = self.group_notification_weekdays.get(group.strip())
+            return weekdays is None or when.weekday() in weekdays
 
         start_minute, end_minute = window
         if start_minute == end_minute:
-            return True
+            weekdays = self.group_notification_weekdays.get(group.strip())
+            return weekdays is None or when.weekday() in weekdays
 
         current_minute = when.hour * 60 + when.minute
-        if start_minute < end_minute:
-            return start_minute <= current_minute < end_minute
+        in_window = (
+            start_minute <= current_minute < end_minute
+            if start_minute < end_minute
+            else current_minute >= start_minute or current_minute < end_minute
+        )
+        if not in_window:
+            return False
 
-        return current_minute >= start_minute or current_minute < end_minute
+        weekdays = self.group_notification_weekdays.get(group.strip())
+        return weekdays is None or when.weekday() in weekdays
 
     @staticmethod
     def _normalize_group_thresholds(
@@ -218,6 +240,24 @@ class OutageNotifier:
                 continue
 
             normalized[group_name] = (start, end)
+
+        return normalized
+
+    @staticmethod
+    def _normalize_group_notification_weekdays(
+        group_notification_weekdays: dict[str, tuple[int, ...]],
+    ) -> dict[str, tuple[int, ...]]:
+        """Normaliza dias da semana por grupo."""
+
+        normalized: dict[str, tuple[int, ...]] = {}
+        for group, weekdays in group_notification_weekdays.items():
+            group_name = group.strip()
+            if not group_name:
+                continue
+
+            normalized[group_name] = tuple(
+                sorted({int(day) for day in weekdays if 0 <= int(day) <= 6})
+            )
 
         return normalized
 

@@ -114,7 +114,43 @@ nome, endereco, grupo ou intervalo e clique em "Salvar edicao". Para sair sem
 mudar, clique em "Cancelar".
 
 
-6. Notificacoes pelo WhatsApp
+6. Painel de operacao
+---------------------
+
+A aba Painel organiza a analise em tres blocos:
+
+- Visao geral: estado atual e eventos por grupo.
+- Detalhes: eventos por hora e lista filtrada de eventos recentes.
+- Indicadores: tempo offline por grupo, tipos de evento e top equipamentos no historico.
+
+Para melhorar o desempenho, os graficos do painel usam somente os 1000 eventos
+mais recentes do historico e a atualizacao analitica roda em ritmo mais leve.
+Quando o filtro nao muda de verdade, o programa evita redesenhar tudo de novo.
+
+No topo da aba existem filtros por grupo e periodo. Os periodos disponiveis sao:
+
+- 24h
+- 7d
+- 30d
+- todos
+
+Os cards do topo exibem:
+
+- total de eventos;
+- eventos filtrados;
+- grupo com mais ocorrencias;
+- ultimo evento do filtro.
+
+Capturas de tela do app:
+
+Monitoramento:
+docs/screenshot-monitoramento.png
+
+Painel:
+docs/screenshot-painel.png
+
+
+7. Notificacoes pelo WhatsApp
 -----------------------------
 
 As notificacoes sao configuradas na aba Configuracoes do programa.
@@ -164,7 +200,8 @@ minutos.
 
 Na area Alertas por grupo, escolha o grupo, informe os intervalos e clique em
 Salvar grupo. Se quiser limitar o horario de envio, preencha Notificar de e Ate
-no formato HH:MM. Quando esses dois campos ficam em branco, o grupo notifica 24h.
+no formato HH:MM. Tambem marque os dias da semana em que esse grupo pode
+notificar. Quando esses dois campos ficam em branco, o grupo notifica 24h.
 Para voltar ao intervalo global e notificacao 24h, selecione o grupo e clique
 em Usar global.
 
@@ -190,7 +227,7 @@ Para evitar mensagens desnecessarias, a notificacao de recuperacao so e enviada
 quando a queda ja tinha gerado pelo menos um alerta de desconexao.
 
 
-7. Log de quedas
+8. Log de quedas
 ----------------
 
 O programa cria automaticamente o arquivo:
@@ -204,7 +241,7 @@ Quando um alvo para de responder, o log registra o inicio da queda. Quando ele
 volta a responder, o log registra o fim da queda e a duracao total.
 
 
-8. Armazenamento das configuracoes sensiveis
+9. Armazenamento das configuracoes sensiveis
 --------------------------------------------
 
 As informacoes sensiveis da Evolution API nao ficam salvas no codigo.
@@ -225,7 +262,7 @@ Se o programa for usado em outra maquina, ou com outro usuario do Windows, sera
 necessario preencher as configuracoes novamente pela aba Configuracoes.
 
 
-9. Arquivos principais
+10. Arquivos principais
 ----------------------
 
 main.py
@@ -255,7 +292,7 @@ Controla o tempo de queda e dispara notificacoes.
 outage_logger.py
 Registra inicio, fim e duracao das quedas no arquivo quedas_log.txt.
 
-10. Observacoes importantes
+11. Observacoes importantes
 --------------------------
 
 - O computador que executa o programa precisa ter acesso a rede dos
