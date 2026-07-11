@@ -126,6 +126,7 @@ Nessa aba devem ser preenchidos:
 - Chave da API.
 - Intervalos que devem gerar alertas enquanto a queda continuar.
 - Intervalos especificos por grupo, quando algum grupo precisar de outro ritmo.
+- Horario de notificacao por grupo, quando algum grupo nao deve alertar de madrugada.
 - Falhas seguidas necessarias para confirmar offline.
 - Quantidade de mudancas e janela em minutos para marcar oscilacao.
 
@@ -162,8 +163,13 @@ marca um alvo como oscilando quando ha 4 mudancas de estado dentro de 10
 minutos.
 
 Na area Alertas por grupo, escolha o grupo, informe os intervalos e clique em
-Salvar grupo. Para voltar ao intervalo global, selecione o grupo e clique em
-Usar global.
+Salvar grupo. Se quiser limitar o horario de envio, preencha Notificar de e Ate
+no formato HH:MM. Quando esses dois campos ficam em branco, o grupo notifica 24h.
+Para voltar ao intervalo global e notificacao 24h, selecione o grupo e clique
+em Usar global.
+
+Fora do horario configurado, o alvo continua sendo monitorado, mas nao envia
+WhatsApp e a queda nao fica acumulada para disparar quando o horario voltar.
 
 Na tela principal, a area Manutencao permite silenciar alertas por alguns
 minutos. Voce pode silenciar somente o alvo selecionado, todos os alvos de um
@@ -172,6 +178,10 @@ continuam sendo monitorados, mas nao geram alertas pelo WhatsApp.
 
 Tambem e possivel encerrar a manutencao do alvo selecionado, do grupo escolhido
 ou de todos os alvos antes do tempo acabar.
+
+Ao terminar a manutencao, o programa nao envia alertas acumulados do periodo
+silenciado. Se o alvo continuar offline, a contagem de notificacao recomeca a
+partir do fim da manutencao.
 
 Quando a conexao do alvo e reestabelecida, o programa tambem envia uma
 mensagem informando a recuperacao.

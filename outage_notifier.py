@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 
 from notification_client import EvolutionApiClient, NotificationResponse
@@ -52,7 +52,11 @@ class OutageNotifier:
         self.group_thresholds_seconds = self._normalize_group_thresholds(
             self.settings.group_thresholds_seconds
         )
+        self.group_notification_windows = self._normalize_group_notification_windows(
+            self.settings.group_notification_windows
+        )
         self._outages_by_ip: dict[str, OutageState] = {}
+        self._suppressed_since_by_ip: dict[str, datetime] = {}
 
     def update_settings(self, settings: NotificationSettings) -> None:
         """Atualiza as configuracoes usadas nos proximos alertas."""
@@ -62,6 +66,7 @@ class OutageNotifier:
         self.group_number = settings.whatsapp_number
         self.update_thresholds(settings.thresholds_seconds)
         self.update_group_thresholds(settings.group_thresholds_seconds)
+        self.update_group_notification_windows(settings.group_notification_windows)
 
     def update_thresholds(self, thresholds_seconds: tuple[int, ...]) -> None:
         """Atualiza os intervalos usados nos proximos alertas."""
@@ -73,8 +78,22 @@ class OutageNotifier:
 
         self.group_thresholds_seconds = self._normalize_group_thresholds(group_thresholds_seconds)
 
+    def update_group_notification_windows(
+        self,
+        group_notification_windows: dict[str, tuple[str, str]],
+    ) -> None:
+        """Atualiza os horarios em que cada grupo pode notificar."""
+
+        self.group_notification_windows = self._normalize_group_notification_windows(
+            group_notification_windows
+        )
+
     def handle_ping_result(self, result: PingResult) -> None:
         """Atualiza o estado de queda e envia alertas quando necessario."""
+
+        if not self._notifications_allowed_for_group(result.group, result.checked_at):
+            self.clear(result.ip_address, reset_at=result.checked_at)
+            return
 
         if result.is_online:
             self._handle_recovery(result)
@@ -82,9 +101,9 @@ class OutageNotifier:
 
         outage = self._outages_by_ip.get(result.ip_address)
         if outage is None:
-            outage = OutageState(started_at=result.outage_started_at or result.checked_at)
+            outage = OutageState(started_at=self._effective_outage_started_at(result))
             self._outages_by_ip[result.ip_address] = outage
-            self.logger.log_outage_started(result)
+            self.logger.log_outage_started(replace(result, outage_started_at=outage.started_at))
 
         elapsed_seconds = (result.checked_at - outage.started_at).total_seconds()
         for threshold in self._thresholds_for_group(result.group):
@@ -92,18 +111,29 @@ class OutageNotifier:
                 outage.notified_thresholds.add(threshold)
                 self._send_outage_notification(result, outage.started_at, threshold)
 
-    def clear(self, ip_address: str) -> None:
+    def clear(
+        self,
+        ip_address: str,
+        reset_at: datetime | None = None,
+        forget_suppression: bool = False,
+    ) -> None:
         """Remove o estado de queda quando o equipamento volta ou e removido."""
 
         self._outages_by_ip.pop(ip_address, None)
+        if forget_suppression:
+            self._suppressed_since_by_ip.pop(ip_address, None)
+        elif reset_at is not None:
+            self._suppressed_since_by_ip[ip_address] = reset_at
 
     def _handle_recovery(self, result: PingResult) -> None:
         """Notifica a recuperacao quando uma queda alertada volta ao normal."""
 
         outage = self._outages_by_ip.pop(result.ip_address, None)
         if outage is None:
+            self._suppressed_since_by_ip.pop(result.ip_address, None)
             return
 
+        self._suppressed_since_by_ip.pop(result.ip_address, None)
         self.logger.log_outage_finished(result, outage.started_at)
         self._send_reached_thresholds(result, outage)
 
@@ -128,6 +158,32 @@ class OutageNotifier:
 
         return self.group_thresholds_seconds.get(group.strip(), self.thresholds_seconds)
 
+    def _effective_outage_started_at(self, result: PingResult) -> datetime:
+        """Ignora tempo de queda acumulado durante janelas silenciadas."""
+
+        if result.ip_address in self._suppressed_since_by_ip:
+            self._suppressed_since_by_ip.pop(result.ip_address, None)
+            return result.checked_at
+
+        return result.outage_started_at or result.checked_at
+
+    def _notifications_allowed_for_group(self, group: str, when: datetime) -> bool:
+        """Indica se o grupo pode enviar notificacoes no horario informado."""
+
+        window = self.group_notification_windows.get(group.strip())
+        if window is None:
+            return True
+
+        start_minute, end_minute = window
+        if start_minute == end_minute:
+            return True
+
+        current_minute = when.hour * 60 + when.minute
+        if start_minute < end_minute:
+            return start_minute <= current_minute < end_minute
+
+        return current_minute >= start_minute or current_minute < end_minute
+
     @staticmethod
     def _normalize_group_thresholds(
         group_thresholds_seconds: dict[str, tuple[int, ...]],
@@ -141,6 +197,27 @@ class OutageNotifier:
                 continue
 
             normalized[group_name] = normalize_thresholds_seconds(thresholds)
+
+        return normalized
+
+    @staticmethod
+    def _normalize_group_notification_windows(
+        group_notification_windows: dict[str, tuple[str, str]],
+    ) -> dict[str, tuple[int, int]]:
+        """Normaliza janelas HH:MM para minutos do dia."""
+
+        normalized: dict[str, tuple[int, int]] = {}
+        for group, window in group_notification_windows.items():
+            group_name = group.strip()
+            if not group_name or not isinstance(window, (list, tuple)) or len(window) != 2:
+                continue
+
+            start = _time_text_to_minutes(str(window[0]))
+            end = _time_text_to_minutes(str(window[1]))
+            if start is None or end is None:
+                continue
+
+            normalized[group_name] = (start, end)
 
         return normalized
 
@@ -237,6 +314,25 @@ def _format_duration(total_seconds: int) -> str:
 
     seconds = int(total_seconds)
     return _format_elapsed_duration(seconds)
+
+
+def _time_text_to_minutes(value: str) -> int | None:
+    """Converte HH:MM para minutos desde meia-noite."""
+
+    parts = value.strip().split(":")
+    if len(parts) != 2:
+        return None
+
+    try:
+        hour = int(parts[0])
+        minute = int(parts[1])
+    except ValueError:
+        return None
+
+    if not 0 <= hour <= 23 or not 0 <= minute <= 59:
+        return None
+
+    return hour * 60 + minute
 
 
 def _format_elapsed_duration(total_seconds: int) -> str:

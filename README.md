@@ -46,9 +46,10 @@ pasta fixa e criar apenas um atalho para ele na area de trabalho.
 - Historico rapido de eventos recentes na tela principal.
 - Confirmacao de offline apenas apos falhas consecutivas configuraveis.
 - Deteccao de equipamentos oscilando.
-- Janela de manutencao para silenciar alertas temporariamente por alvo, grupo ou todos.
+- Janela de manutencao para silenciar alertas temporariamente por alvo, grupo ou todos,
+  sem envio acumulado ao encerrar.
 - Notificacao via WhatsApp em intervalos de queda definidos pelo usuario.
-- Intervalos de notificacao especificos por grupo, com intervalo global como padrao.
+- Intervalos e horarios de notificacao especificos por grupo, com regra global 24h como padrao.
 - Notificacao via WhatsApp quando a conexao e reestabelecida apos uma queda alertada.
 - Aba de configuracoes para informar endpoint, destinatario e chave da Evolution API.
 - Fila de envio de notificacoes para processar alertas simultaneos sem disputar a API.
@@ -131,6 +132,7 @@ Preencha:
 - Chave da API.
 - Intervalos que devem gerar alerta quando a queda continuar.
 - Intervalos especificos por grupo, quando algum grupo precisar de outro ritmo.
+- Horario de notificacao por grupo, quando algum grupo nao deve alertar de madrugada.
 - Quantidade de falhas seguidas para confirmar offline.
 - Quantidade de mudancas online/offline e janela em minutos para marcar oscilacao.
 
@@ -149,9 +151,13 @@ unidade continuam sendo tratados como minutos. Exemplos:
 O motor de monitoramento usa por padrao 3 falhas seguidas para confirmar
 offline e marca oscilacao quando ha 4 mudancas de estado dentro de 10 minutos.
 
-Na secao `Alertas por grupo`, escolha um grupo, informe os intervalos e clique
-em `Salvar grupo`. Para voltar a usar o intervalo global, selecione o grupo e
-clique em `Usar global`.
+Na secao `Alertas por grupo`, escolha um grupo, informe os intervalos e, se
+necessario, preencha `Notificar de` e `Ate` no formato `HH:MM`. Quando esses
+dois campos ficam em branco, o grupo notifica 24h.
+
+Fora do horario configurado, o alvo continua sendo monitorado, mas nao envia
+WhatsApp e a queda nao fica acumulada para disparar depois. Para voltar a usar
+o intervalo global e notificacao 24h, selecione o grupo e clique em `Usar global`.
 
 Ao clicar em `Salvar configuracoes`, o programa cria o arquivo local:
 

@@ -118,8 +118,10 @@ class NetworkMonitorApp(tk.Tk):
         )
         self.group_alert_group_var = tk.StringVar()
         self.group_alert_intervals_var = tk.StringVar()
+        self.group_alert_window_start_var = tk.StringVar()
+        self.group_alert_window_end_var = tk.StringVar()
         self.group_alert_status_var = tk.StringVar(
-            value="Grupos sem regra propria usam o intervalo global."
+            value="Grupos sem regra propria usam o intervalo global e notificam 24h."
         )
         self.offline_failure_threshold_var = tk.StringVar(
             value=str(self._notification_settings.offline_failure_threshold)
@@ -147,16 +149,47 @@ class NetworkMonitorApp(tk.Tk):
         if "clam" in style.theme_names():
             style.theme_use("clam")
 
-        style.configure("TFrame", background="#f7f8fa")
-        style.configure("TLabel", background="#f7f8fa", font=("Segoe UI", 10))
-        style.configure("Title.TLabel", font=("Segoe UI", 15, "bold"))
-        style.configure("Summary.TLabel", foreground="#4b5563")
-        style.configure("Card.TFrame", background="#ffffff", relief="solid", borderwidth=1)
-        style.configure("CardTitle.TLabel", background="#ffffff", foreground="#4b5563")
-        style.configure("CardValue.TLabel", background="#ffffff", font=("Segoe UI", 16, "bold"))
-        style.configure("TButton", font=("Segoe UI", 10))
-        style.configure("Treeview", rowheight=30, font=("Segoe UI", 10))
-        style.configure("Treeview.Heading", font=("Segoe UI", 10, "bold"))
+        bg = "#eef2f7"
+        panel = "#ffffff"
+        text = "#102033"
+        muted = "#546579"
+        accent = "#2563eb"
+        accent_hover = "#1d4ed8"
+        success = "#137333"
+        warning = "#b45309"
+        danger = "#b3261e"
+
+        self.configure(background=bg)
+        style.configure("TFrame", background=bg)
+        style.configure("TLabel", background=bg, foreground=text, font=("Segoe UI", 10))
+        style.configure("Title.TLabel", background=bg, font=("Segoe UI Semibold", 16))
+        style.configure("Subtitle.TLabel", background=bg, foreground=muted, font=("Segoe UI", 10))
+        style.configure("Summary.TLabel", background=bg, foreground=muted)
+        style.configure("Section.TLabelframe", background=bg)
+        style.configure("Section.TLabelframe.Label", background=bg, foreground=text, font=("Segoe UI Semibold", 10))
+        style.configure("Panel.TFrame", background=panel)
+        style.configure("Card.TFrame", background=panel, relief="solid", borderwidth=1)
+        style.configure("CardTitle.TLabel", background=panel, foreground=muted)
+        style.configure("CardValue.TLabel", background=panel, foreground=text, font=("Segoe UI Semibold", 17))
+        style.configure("TButton", font=("Segoe UI Semibold", 10), padding=(10, 6))
+        style.configure("Primary.TButton", background=accent, foreground="#ffffff")
+        style.map("Primary.TButton", background=[("active", accent_hover), ("pressed", accent_hover)])
+        style.configure("Secondary.TButton", background="#dbe4f0", foreground=text)
+        style.map("Secondary.TButton", background=[("active", "#cbd5e1"), ("pressed", "#cbd5e1")])
+        style.configure("Danger.TButton", background="#f4d7d5", foreground=danger)
+        style.map("Danger.TButton", background=[("active", "#efc4c0"), ("pressed", "#efc4c0")])
+        style.configure("Treeview", rowheight=30, font=("Segoe UI", 10), fieldbackground="#ffffff")
+        style.configure("Treeview.Heading", font=("Segoe UI Semibold", 10))
+        style.configure("TNotebook", background=bg, borderwidth=0)
+        style.configure("TNotebook.Tab", padding=(14, 8), font=("Segoe UI Semibold", 10))
+        style.map("TNotebook.Tab", padding=[("selected", (14, 8))])
+
+        style.configure("online.Treeview", foreground=success)
+        style.configure("offline.Treeview", foreground=danger)
+        style.configure("unstable.Treeview", foreground=warning)
+        style.configure("flapping.Treeview", foreground="#8a4b00")
+        style.configure("maintenance.Treeview", foreground="#596579")
+        style.configure("waiting.Treeview", foreground="#5f6368")
 
     def _build_layout(self) -> None:
         """Cria os campos, botoes e tabela da aplicacao."""
@@ -186,20 +219,28 @@ class NetworkMonitorApp(tk.Tk):
         parent.columnconfigure(0, weight=1)
         parent.rowconfigure(4, weight=1)
 
-        header = ttk.Frame(parent)
+        header = ttk.Frame(parent, style="Panel.TFrame", padding=(16, 14))
         header.grid(row=0, column=0, sticky="ew", pady=(0, 10))
         header.columnconfigure(0, weight=1)
+        header.columnconfigure(1, weight=0)
 
         ttk.Label(header, text="Monitor de Equipamentos e Servicos", style="Title.TLabel").grid(
             row=0, column=0, sticky="w"
         )
-        ttk.Label(header, textvariable=self.summary_var, style="Summary.TLabel").grid(
-            row=1, column=0, sticky="w", pady=(4, 0)
-        )
+        ttk.Label(
+            header,
+            textvariable=self.summary_var,
+            style="Subtitle.TLabel",
+        ).grid(row=1, column=0, sticky="w", pady=(4, 0))
+        ttk.Label(
+            header,
+            text="Ping, status e alertas em uma unica tela.",
+            style="Subtitle.TLabel",
+        ).grid(row=0, column=1, rowspan=2, sticky="e")
 
         self._build_dashboard_cards(parent)
 
-        self.equipment_form = ttk.LabelFrame(parent, text="Novo alvo", padding=12)
+        self.equipment_form = ttk.LabelFrame(parent, text="Novo alvo", padding=12, style="Section.TLabelframe")
         self.equipment_form.grid(row=2, column=0, sticky="ew", pady=(0, 10))
         self.equipment_form.columnconfigure(1, weight=1)
         self.equipment_form.columnconfigure(3, weight=1)
@@ -227,6 +268,7 @@ class NetworkMonitorApp(tk.Tk):
         self.save_equipment_button = ttk.Button(
             form,
             text="Adicionar",
+            style="Primary.TButton",
             command=self._save_equipment_form,
         )
         self.save_equipment_button.grid(
@@ -235,6 +277,7 @@ class NetworkMonitorApp(tk.Tk):
         self.cancel_edit_button = ttk.Button(
             form,
             text="Cancelar",
+            style="Secondary.TButton",
             command=self._cancel_equipment_edit,
             state="disabled",
         )
@@ -242,7 +285,7 @@ class NetworkMonitorApp(tk.Tk):
             row=1, column=4, sticky="nsew", padx=(0, 8), pady=(10, 0)
         )
 
-        filters = ttk.LabelFrame(parent, text="Filtros", padding=10)
+        filters = ttk.LabelFrame(parent, text="Filtros", padding=10, style="Section.TLabelframe")
         filters.grid(row=3, column=0, sticky="ew", pady=(0, 10))
         filters.columnconfigure(1, weight=1)
         filters.columnconfigure(3, weight=1)
@@ -319,7 +362,12 @@ class NetworkMonitorApp(tk.Tk):
     def _build_group_summary(self, parent: ttk.Frame) -> None:
         """Cria o resumo por grupo."""
 
-        group_frame = ttk.LabelFrame(parent, text="Resumo por grupo", padding=8)
+        group_frame = ttk.LabelFrame(
+            parent,
+            text="Resumo por grupo",
+            padding=8,
+            style="Section.TLabelframe",
+        )
         group_frame.grid(row=0, column=0, sticky="nsew", padx=(0, 10))
         group_frame.rowconfigure(0, weight=1)
 
@@ -431,7 +479,12 @@ class NetworkMonitorApp(tk.Tk):
     def _build_recent_events(self, parent: ttk.Frame) -> None:
         """Cria a lista curta de eventos recentes."""
 
-        events_frame = ttk.LabelFrame(parent, text="Eventos recentes", padding=8)
+        events_frame = ttk.LabelFrame(
+            parent,
+            text="Eventos recentes",
+            padding=8,
+            style="Section.TLabelframe",
+        )
         events_frame.grid(row=5, column=0, sticky="ew", pady=(10, 0))
         events_frame.columnconfigure(0, weight=1)
 
@@ -491,51 +544,91 @@ class NetworkMonitorApp(tk.Tk):
             sticky="w",
             padx=(0, 8),
         )
-        ttk.Button(actions, text="Silenciar selecionado", command=self._start_maintenance).grid(
+        ttk.Button(
+            actions,
+            text="Silenciar selecionado",
+            style="Primary.TButton",
+            command=self._start_maintenance,
+        ).grid(
             row=0,
             column=4,
             sticky="w",
             padx=(0, 8),
         )
-        ttk.Button(actions, text="Silenciar grupo", command=self._start_group_maintenance).grid(
+        ttk.Button(
+            actions,
+            text="Silenciar grupo",
+            style="Secondary.TButton",
+            command=self._start_group_maintenance,
+        ).grid(
             row=0,
             column=5,
             sticky="w",
             padx=(0, 8),
         )
-        ttk.Button(actions, text="Silenciar todos", command=self._start_all_maintenance).grid(
+        ttk.Button(
+            actions,
+            text="Silenciar todos",
+            style="Secondary.TButton",
+            command=self._start_all_maintenance,
+        ).grid(
             row=0,
             column=6,
             sticky="w",
         )
-        ttk.Button(actions, text="Encerrar selecionado", command=self._end_maintenance).grid(
+        ttk.Button(
+            actions,
+            text="Encerrar selecionado",
+            style="Secondary.TButton",
+            command=self._end_maintenance,
+        ).grid(
             row=1,
             column=4,
             sticky="w",
             padx=(0, 8),
             pady=(8, 0),
         )
-        ttk.Button(actions, text="Encerrar grupo", command=self._end_group_maintenance).grid(
+        ttk.Button(
+            actions,
+            text="Encerrar grupo",
+            style="Secondary.TButton",
+            command=self._end_group_maintenance,
+        ).grid(
             row=1,
             column=5,
             sticky="w",
             padx=(0, 8),
             pady=(8, 0),
         )
-        ttk.Button(actions, text="Encerrar todos", command=self._end_all_maintenance).grid(
+        ttk.Button(
+            actions,
+            text="Encerrar todos",
+            style="Secondary.TButton",
+            command=self._end_all_maintenance,
+        ).grid(
             row=1,
             column=6,
             sticky="w",
             pady=(8, 0),
         )
-        ttk.Button(actions, text="Editar selecionado", command=self._edit_selected).grid(
+        ttk.Button(
+            actions,
+            text="Editar selecionado",
+            style="Secondary.TButton",
+            command=self._edit_selected,
+        ).grid(
             row=1,
             column=8,
             sticky="w",
             padx=(0, 8),
             pady=(8, 0),
         )
-        ttk.Button(actions, text="Remover selecionado", command=self._remove_selected).grid(
+        ttk.Button(
+            actions,
+            text="Remover selecionado",
+            style="Danger.TButton",
+            command=self._remove_selected,
+        ).grid(
             row=1,
             column=9,
             sticky="e",
@@ -547,7 +640,12 @@ class NetworkMonitorApp(tk.Tk):
 
         parent.columnconfigure(0, weight=1)
 
-        form = ttk.LabelFrame(parent, text="WhatsApp / Evolution API", padding=12)
+        form = ttk.LabelFrame(
+            parent,
+            text="WhatsApp / Evolution API",
+            padding=12,
+            style="Section.TLabelframe",
+        )
         form.grid(row=0, column=0, sticky="ew")
         form.columnconfigure(1, weight=1)
 
@@ -630,12 +728,18 @@ class NetworkMonitorApp(tk.Tk):
         ttk.Button(
             actions,
             text="Salvar configuracoes",
+            style="Primary.TButton",
             command=self._save_notification_settings,
         ).grid(row=0, column=1, sticky="e")
 
         self._build_group_alert_settings(parent)
 
-        help_frame = ttk.LabelFrame(parent, text="Onde encontrar essas informacoes", padding=12)
+        help_frame = ttk.LabelFrame(
+            parent,
+            text="Onde encontrar essas informacoes",
+            padding=12,
+            style="Section.TLabelframe",
+        )
         help_frame.grid(row=2, column=0, sticky="ew", pady=(12, 0))
         help_frame.columnconfigure(0, weight=1)
 
@@ -646,8 +750,9 @@ class NetworkMonitorApp(tk.Tk):
             "Alertar apos: informe os tempos de queda que devem gerar notificacao. "
             "Use s para segundos, m para minutos ou h para horas. "
             "Exemplo: 5s, 30s, 1m, 5m.\n\n"
-            "Alertas por grupo: cadastre intervalos diferentes para grupos especificos. "
-            "Quando nao houver regra para o grupo, vale o intervalo global acima.\n\n"
+            "Alertas por grupo: cadastre intervalos e horarios diferentes para grupos especificos. "
+            "Quando nao houver regra para o grupo, vale o intervalo global acima e notificacao 24h. "
+            "Fora do horario configurado, a queda nao fica acumulada para envio posterior.\n\n"
             "Falhas p/ offline: quantidade de verificacoes seguidas sem resposta antes de "
             "confirmar queda. Oscilacao: quantidade de mudancas online/offline dentro "
             "da janela em minutos.\n\n"
@@ -690,27 +795,73 @@ class NetworkMonitorApp(tk.Tk):
             padx=(0, 12),
         )
 
-        ttk.Button(frame, text="Salvar grupo", command=self._save_group_alert_settings).grid(
+        self.group_alert_save_button = ttk.Button(
+            frame,
+            text="Salvar grupo",
+            style="Primary.TButton",
+            command=self._save_group_alert_settings,
+        )
+        self.group_alert_save_button.grid(
             row=0,
             column=4,
             sticky="ew",
             padx=(0, 8),
         )
-        ttk.Button(frame, text="Usar global", command=self._remove_group_alert_settings).grid(
+        ttk.Button(
+            frame,
+            text="Editar selecionado",
+            style="Secondary.TButton",
+            command=self._edit_selected_group_alert_rule,
+        ).grid(
             row=0,
             column=5,
             sticky="ew",
+            padx=(0, 8),
+        )
+        ttk.Button(
+            frame,
+            text="Usar global",
+            style="Secondary.TButton",
+            command=self._remove_group_alert_settings,
+        ).grid(
+            row=0,
+            column=6,
+            sticky="ew",
+        )
+
+        ttk.Label(frame, text="Notificar de").grid(row=1, column=0, sticky="w", padx=(0, 8))
+        ttk.Entry(frame, textvariable=self.group_alert_window_start_var, width=8).grid(
+            row=1,
+            column=1,
+            sticky="w",
+            padx=(0, 12),
+            pady=(8, 0),
+        )
+        ttk.Label(frame, text="Ate").grid(row=1, column=2, sticky="w", padx=(0, 8), pady=(8, 0))
+        ttk.Entry(frame, textvariable=self.group_alert_window_end_var, width=8).grid(
+            row=1,
+            column=3,
+            sticky="w",
+            padx=(0, 12),
+            pady=(8, 0),
+        )
+        ttk.Label(frame, text="Em branco: 24h").grid(
+            row=1,
+            column=4,
+            columnspan=2,
+            sticky="w",
+            pady=(8, 0),
         )
 
         ttk.Label(frame, textvariable=self.group_alert_status_var, style="Summary.TLabel").grid(
-            row=1,
+            row=2,
             column=0,
-            columnspan=6,
+            columnspan=7,
             sticky="w",
             pady=(8, 8),
         )
 
-        columns = ("group", "intervals")
+        columns = ("group", "intervals", "window")
         self.group_alert_tree = ttk.Treeview(
             frame,
             columns=columns,
@@ -720,9 +871,11 @@ class NetworkMonitorApp(tk.Tk):
         )
         self.group_alert_tree.heading("group", text="Grupo")
         self.group_alert_tree.heading("intervals", text="Intervalos")
+        self.group_alert_tree.heading("window", text="Horario")
         self.group_alert_tree.column("group", width=180, minwidth=120)
-        self.group_alert_tree.column("intervals", width=360, minwidth=180)
-        self.group_alert_tree.grid(row=2, column=0, columnspan=6, sticky="ew")
+        self.group_alert_tree.column("intervals", width=260, minwidth=160)
+        self.group_alert_tree.column("window", width=160, minwidth=120)
+        self.group_alert_tree.grid(row=3, column=0, columnspan=7, sticky="ew")
         self.group_alert_tree.bind("<<TreeviewSelect>>", self._select_group_alert_rule)
         self._refresh_group_alert_options()
 
@@ -778,6 +931,7 @@ class NetworkMonitorApp(tk.Tk):
             whatsapp_number=self.whatsapp_number_var.get().strip(),
             thresholds_seconds=thresholds_seconds,
             group_thresholds_seconds=self._notification_settings.group_thresholds_seconds,
+            group_notification_windows=self._notification_settings.group_notification_windows,
             offline_failure_threshold=offline_failure_threshold,
             flapping_transition_count=flapping_transition_count,
             flapping_window_minutes=flapping_window_minutes,
@@ -821,18 +975,29 @@ class NetworkMonitorApp(tk.Tk):
         group = self._normalize_group(self.group_alert_group_var.get())
         try:
             thresholds = parse_thresholds_text(self.group_alert_intervals_var.get())
+            notification_window = self._parse_group_notification_window()
         except ValueError as exc:
-            messagebox.showwarning("Intervalos invalidos", str(exc))
+            messagebox.showwarning("Regra invalida", str(exc))
             return
 
         group_thresholds = dict(self._notification_settings.group_thresholds_seconds)
         group_thresholds[group] = thresholds
-        settings = self._copy_notification_settings(group_thresholds_seconds=group_thresholds)
+        group_windows = dict(self._notification_settings.group_notification_windows)
+        if notification_window is None:
+            group_windows.pop(group, None)
+        else:
+            group_windows[group] = notification_window
+
+        settings = self._copy_notification_settings(
+            group_thresholds_seconds=group_thresholds,
+            group_notification_windows=group_windows,
+        )
         if not self._persist_notification_settings(settings):
             return
 
         self.group_alert_intervals_var.set(format_thresholds_text(thresholds))
-        self.group_alert_status_var.set(f"Intervalos salvos para o grupo {group}.")
+        self._load_group_alert_selection()
+        self.group_alert_status_var.set(f"Regras salvas para o grupo {group}.")
         self._refresh_group_alert_options()
 
     def _remove_group_alert_settings(self) -> None:
@@ -840,23 +1005,29 @@ class NetworkMonitorApp(tk.Tk):
 
         group = self._normalize_group(self.group_alert_group_var.get())
         group_thresholds = dict(self._notification_settings.group_thresholds_seconds)
-        if group not in group_thresholds:
-            self.group_alert_status_var.set(f"O grupo {group} ja usa o intervalo global.")
+        group_windows = dict(self._notification_settings.group_notification_windows)
+        if group not in group_thresholds and group not in group_windows:
+            self.group_alert_status_var.set(f"O grupo {group} ja usa as regras globais.")
             self._load_group_alert_selection()
             return
 
         group_thresholds.pop(group, None)
-        settings = self._copy_notification_settings(group_thresholds_seconds=group_thresholds)
+        group_windows.pop(group, None)
+        settings = self._copy_notification_settings(
+            group_thresholds_seconds=group_thresholds,
+            group_notification_windows=group_windows,
+        )
         if not self._persist_notification_settings(settings):
             return
 
-        self.group_alert_status_var.set(f"O grupo {group} voltou a usar o intervalo global.")
+        self.group_alert_status_var.set(f"O grupo {group} voltou a usar as regras globais.")
         self._refresh_group_alert_options()
         self._load_group_alert_selection()
 
     def _copy_notification_settings(
         self,
         group_thresholds_seconds: dict[str, tuple[int, ...]] | None = None,
+        group_notification_windows: dict[str, tuple[str, str]] | None = None,
     ) -> NotificationSettings:
         """Cria uma copia das configuracoes atuais com grupos atualizados."""
 
@@ -869,6 +1040,11 @@ class NetworkMonitorApp(tk.Tk):
                 group_thresholds_seconds
                 if group_thresholds_seconds is not None
                 else self._notification_settings.group_thresholds_seconds
+            ),
+            group_notification_windows=(
+                group_notification_windows
+                if group_notification_windows is not None
+                else self._notification_settings.group_notification_windows
             ),
             offline_failure_threshold=self._notification_settings.offline_failure_threshold,
             flapping_transition_count=self._notification_settings.flapping_transition_count,
@@ -897,7 +1073,14 @@ class NetworkMonitorApp(tk.Tk):
             group,
             self._notification_settings.thresholds_seconds,
         )
+        notification_window = self._notification_settings.group_notification_windows.get(group)
         self.group_alert_intervals_var.set(format_thresholds_text(thresholds))
+        if notification_window is None:
+            self.group_alert_window_start_var.set("")
+            self.group_alert_window_end_var.set("")
+        else:
+            self.group_alert_window_start_var.set(notification_window[0])
+            self.group_alert_window_end_var.set(notification_window[1])
 
     def _select_group_alert_rule(self, _event: tk.Event) -> None:
         """Seleciona uma regra de grupo a partir da tabela."""
@@ -913,6 +1096,19 @@ class NetworkMonitorApp(tk.Tk):
         self.group_alert_group_var.set(str(values[0]))
         self._load_group_alert_selection()
 
+    def _edit_selected_group_alert_rule(self) -> None:
+        """Carrega a regra do grupo selecionado para edicao."""
+
+        selection = self.group_alert_tree.selection()
+        if not selection:
+            messagebox.showinfo("Editar grupo", "Selecione um grupo na tabela abaixo.")
+            return
+
+        self._select_group_alert_rule(None)
+        self.group_alert_status_var.set(
+            f"Editando o grupo {self.group_alert_group_var.get()}. Ajuste os campos e clique em salvar."
+        )
+
     def _refresh_group_alert_options(self) -> None:
         """Atualiza grupos disponiveis na configuracao de alertas por grupo."""
 
@@ -925,6 +1121,7 @@ class NetworkMonitorApp(tk.Tk):
             if self._normalize_group(group)
         }
         groups.update(self._notification_settings.group_thresholds_seconds)
+        groups.update(self._notification_settings.group_notification_windows)
         groups.add(self._normalize_group(self.group_var.get()))
         groups.add(DEFAULT_EQUIPMENT_GROUP)
 
@@ -949,12 +1146,69 @@ class NetworkMonitorApp(tk.Tk):
         for item_id in self.group_alert_tree.get_children():
             self.group_alert_tree.delete(item_id)
 
-        for group, thresholds in sorted(self._notification_settings.group_thresholds_seconds.items()):
+        groups = set(self._notification_settings.group_thresholds_seconds)
+        groups.update(self._notification_settings.group_notification_windows)
+        for group in sorted(groups):
+            thresholds = self._notification_settings.group_thresholds_seconds.get(group)
+            intervals_text = (
+                format_thresholds_text(thresholds)
+                if thresholds is not None
+                else f"Global ({format_thresholds_text(self._notification_settings.thresholds_seconds)})"
+            )
+            notification_window = self._notification_settings.group_notification_windows.get(group)
             self.group_alert_tree.insert(
                 "",
                 "end",
-                values=(group, format_thresholds_text(thresholds)),
+                values=(
+                    group,
+                    intervals_text,
+                    self._format_notification_window(notification_window),
+                ),
             )
+
+    def _parse_group_notification_window(self) -> tuple[str, str] | None:
+        """Le a janela de notificacao do formulario de grupo."""
+
+        start_text = self.group_alert_window_start_var.get().strip()
+        end_text = self.group_alert_window_end_var.get().strip()
+        if not start_text and not end_text:
+            return None
+
+        if not start_text or not end_text:
+            raise ValueError("Preencha inicio e fim do horario, ou deixe ambos em branco.")
+
+        return (
+            self._normalize_time_text(start_text, "Notificar de"),
+            self._normalize_time_text(end_text, "Ate"),
+        )
+
+    @staticmethod
+    def _format_notification_window(window: tuple[str, str] | None) -> str:
+        """Formata a janela de notificacao para a tabela."""
+
+        if window is None:
+            return "24h"
+
+        return f"{window[0]} ate {window[1]}"
+
+    @staticmethod
+    def _normalize_time_text(value: str, field_name: str) -> str:
+        """Normaliza um horario HH:MM informado na interface."""
+
+        parts = value.strip().split(":")
+        if len(parts) != 2:
+            raise ValueError(f"{field_name} deve estar no formato HH:MM.")
+
+        try:
+            hour = int(parts[0])
+            minute = int(parts[1])
+        except ValueError as exc:
+            raise ValueError(f"{field_name} deve estar no formato HH:MM.") from exc
+
+        if not 0 <= hour <= 23 or not 0 <= minute <= 59:
+            raise ValueError(f"{field_name} deve estar entre 00:00 e 23:59.")
+
+        return f"{hour:02d}:{minute:02d}"
 
     def _save_equipment_form(self) -> None:
         """Valida o formulario e adiciona ou edita o equipamento."""
@@ -1074,7 +1328,7 @@ class NetworkMonitorApp(tk.Tk):
         self._runtime_by_ip.pop(ip_address, None)
         self._group_by_ip.pop(ip_address, None)
         self._visible_ips.discard(ip_address)
-        self._outage_notifier.clear(ip_address)
+        self._outage_notifier.clear(ip_address, forget_suppression=True)
 
         if item_id is not None:
             self.tree.delete(item_id)
@@ -1601,7 +1855,7 @@ class NetworkMonitorApp(tk.Tk):
             state = self._runtime_by_ip.setdefault(ip_address, EquipmentRuntimeState())
             state.maintenance_until = maintenance_until
             state.last_event = f"Manutencao ate {maintenance_until:%H:%M:%S}"
-            self._outage_notifier.clear(ip_address)
+            self._outage_notifier.clear(ip_address, reset_at=maintenance_until)
             self._record_event(ip_address, event_text, now)
             self._update_display_status(ip_address)
             self._render_equipment_row(ip_address)
@@ -1654,6 +1908,7 @@ class NetworkMonitorApp(tk.Tk):
 
             state.maintenance_until = None
             state.last_event = f"{event_text} as {now:%H:%M:%S}"
+            self._outage_notifier.clear(ip_address, reset_at=now)
             self._record_event(ip_address, event_text, now)
             self._update_display_status(ip_address)
             self._render_equipment_row(ip_address)

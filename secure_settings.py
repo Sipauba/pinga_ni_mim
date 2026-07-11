@@ -37,6 +37,7 @@ class NotificationSettings:
     whatsapp_number: str = ""
     thresholds_seconds: tuple[int, ...] = DEFAULT_NOTIFICATION_THRESHOLDS_SECONDS
     group_thresholds_seconds: dict[str, tuple[int, ...]] = field(default_factory=dict)
+    group_notification_windows: dict[str, tuple[str, str]] = field(default_factory=dict)
     offline_failure_threshold: int = DEFAULT_OFFLINE_FAILURE_THRESHOLD
     flapping_transition_count: int = DEFAULT_FLAPPING_TRANSITION_COUNT
     flapping_window_minutes: int = DEFAULT_FLAPPING_WINDOW_MINUTES
@@ -81,6 +82,7 @@ class SecureSettingsStore:
             whatsapp_number=str(payload.get("whatsapp_number", "")).strip(),
             thresholds_seconds=_thresholds_from_payload(payload),
             group_thresholds_seconds=_group_thresholds_from_payload(payload),
+            group_notification_windows=_group_notification_windows_from_payload(payload),
             offline_failure_threshold=_positive_int_from_payload(
                 payload,
                 "offline_failure_threshold",
@@ -111,6 +113,9 @@ class SecureSettingsStore:
                 for group, thresholds in settings.group_thresholds_seconds.items()
                 if group.strip()
             },
+            "group_notification_windows": _serializable_group_notification_windows(
+                settings.group_notification_windows
+            ),
             "offline_failure_threshold": int(settings.offline_failure_threshold),
             "flapping_transition_count": int(settings.flapping_transition_count),
             "flapping_window_minutes": int(settings.flapping_window_minutes),
@@ -286,6 +291,80 @@ def _group_thresholds_from_payload(payload: dict[str, object]) -> dict[str, tupl
             continue
 
     return group_thresholds
+
+
+def _group_notification_windows_from_payload(payload: dict[str, object]) -> dict[str, tuple[str, str]]:
+    """Carrega janelas de notificacao especificas por grupo."""
+
+    raw_groups = payload.get("group_notification_windows")
+    if not isinstance(raw_groups, dict):
+        return {}
+
+    windows: dict[str, tuple[str, str]] = {}
+    for raw_group, raw_window in raw_groups.items():
+        group = str(raw_group).strip()
+        if not group:
+            continue
+
+        raw_start: object
+        raw_end: object
+        if isinstance(raw_window, dict):
+            raw_start = raw_window.get("start", "")
+            raw_end = raw_window.get("end", "")
+        elif isinstance(raw_window, list) and len(raw_window) >= 2:
+            raw_start = raw_window[0]
+            raw_end = raw_window[1]
+        else:
+            continue
+
+        start = _normalize_time_text(str(raw_start))
+        end = _normalize_time_text(str(raw_end))
+        if start is None or end is None:
+            continue
+
+        windows[group] = (start, end)
+
+    return windows
+
+
+def _serializable_group_notification_windows(
+    windows: dict[str, tuple[str, str]],
+) -> dict[str, dict[str, str]]:
+    """Normaliza janelas por grupo antes de salvar."""
+
+    payload: dict[str, dict[str, str]] = {}
+    for group, window in windows.items():
+        group_name = group.strip()
+        if not group_name or not isinstance(window, (list, tuple)) or len(window) != 2:
+            continue
+
+        start = _normalize_time_text(str(window[0]))
+        end = _normalize_time_text(str(window[1]))
+        if start is None or end is None:
+            continue
+
+        payload[group_name] = {"start": start, "end": end}
+
+    return payload
+
+
+def _normalize_time_text(value: str) -> str | None:
+    """Normaliza um horario HH:MM ou retorna None quando invalido."""
+
+    parts = value.strip().split(":")
+    if len(parts) != 2:
+        return None
+
+    try:
+        hour = int(parts[0])
+        minute = int(parts[1])
+    except ValueError:
+        return None
+
+    if not 0 <= hour <= 23 or not 0 <= minute <= 59:
+        return None
+
+    return f"{hour:02d}:{minute:02d}"
 
 
 def _positive_int_from_payload(
